@@ -5,6 +5,22 @@ deferred (not forgotten) and what would trigger picking them up. See
 `docs/adr/0001-architecture-decisions.md` for the decisions these follow
 from.
 
+## Transport
+
+- **A Content-Length-framed transport, alongside `Shell`'s newline-
+  delimited one**: `Shell`/`JsonRpc` currently assume NDJSON framing
+  (ADR D5) — correct for MCP, but that's actually the *unusual* choice
+  in the wider stdio-JSON-RPC world; Content-Length-header framing
+  (LSP, DAP, and most other stdio JSON-RPC servers) is far more common.
+  A sibling transport layer (e.g. `ShellLsp`, or a framing option on
+  `Shell` itself) would open this client up to language servers and
+  similar tools, not just MCP-family servers. Not needed for anything
+  in scope today — recorded here because the idea came up while
+  researching what else `JsonRpc` could plausibly talk to (see the
+  Manual's Tutorial, which uses a purpose-built NDJSON toy server
+  instead, precisely because no well-known *non*-MCP stdio server
+  actually uses this client's framing).
+
 ## Shell layer
 
 - **Stderr handling**: v1 relies on `⎕SHELL`'s default of merging stream 2
@@ -88,6 +104,16 @@ from.
   carrying them through (e.g. via `⎕SIGNAL`'s name/value form) once
   something downstream needs to branch on the error code rather than just
   report it.
+
+## Documentation
+
+- **An Internals Guide**, as a third Manual document alongside
+  Reference and Tutorial: covers the underscore-prefixed helpers each
+  layer keeps private (`_ParseGrep`, `_Envelope`, `_AwaitId`, `_Run`,
+  `_OnOutput`, ...) — for a reader extending a layer or writing a new
+  cover, not for a reader who just wants to use one. Reference
+  deliberately stays scoped to public verbs only (see
+  `docs/manual/reference.md`); this would be where the rest goes.
 
 ## Packaging / distribution
 
