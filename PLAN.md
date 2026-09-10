@@ -6,7 +6,37 @@ tree — see `examples/fff-search-large-tree.apls`) — see `src/*.dyalog` and
 `test/01-*.apls`..`08-*.apls`. v1 scope (ADR D8) is complete; see
 `TODO.md` for what's next. A fifth piece, `JsonRpcCl`, adds a second
 transport (Content-Length framing) alongside the original four phases'
-newline-delimited one — see below.
+newline-delimited one. A sixth, `examples/toy-jsonrpc-fixture-server.py`
+plus `test/09-*.apls`, adds an on-demand mocked stdio peer for
+otherwise hard-to-provoke server misbehaviors — see below.
+
+## Phase 6 — a mocked/canned-fixture stdio peer for hard-to-provoke misbehaviors
+
+All tests up to this point run against the real `fff-mcp.exe`, which
+never misbehaves — it doesn't crash mid-response, send malformed JSON,
+hang, or flood unsolicited notifications. Those failure paths could
+only be reasoned about, not tested on demand. `examples/toy-jsonrpc-
+fixture-server.py` is a second toy NDJSON-framed server (twin in style
+to `examples/toy-jsonrpc-server.py`) whose methods let a test *ask* for
+a specific misbehavior by name: `crash(code)` exits uncleanly instead
+of responding, `garbage()` writes deliberately invalid JSON instead of
+a real response, `hang()` blocks forever and never responds, and
+`burst(count, text)` emits a burst of unsolicited notifications ahead
+of its real response. `test/09-fixture-server-misbehaviors.apls`
+exercises all four against `Shell`/`JsonRpc` and asserts today's actual
+observed behavior for each. See ADR D14.
+
+Verified: all four modes trigger exactly the expected `Shell`/`JsonRpc`
+behavior (crash and hang both signal, correctly distinguishing a
+process-exit signal with the fixture's own exit code from a plain
+timeout signal; malformed JSON signals `JsonRpc`'s "malformed JSON from
+server"; a burst of 8 notifications all land in `h.Notifications`, in
+order, without disrupting the real response that follows) — see
+`TODO.md`'s Shell layer section for what running the `hang` mode
+concretely confirmed about the still-open `Stop` force-kill gap. No
+bugs were fixed here (out of scope for this phase, deliberately); any
+found were recorded in `TODO.md` for the next phase (robustness
+hardening) to actually address.
 
 ## Phase 5 — `JsonRpcCl`: Content-Length framing, for non-MCP servers
 
