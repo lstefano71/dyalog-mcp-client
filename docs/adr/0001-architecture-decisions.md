@@ -231,8 +231,13 @@ Further implementation notes discovered while building it:
   *left argument*, not embedded inside the train** — `sep(≠⊆⊢)text`,
   not `(sep≠⊆⊢)text` (the latter is a monadic application of a 3-train
   missing its left argument entirely, a `SYNTAX ERROR`).
-- **A named traditional function can't be passed as a plain value** the
-  way a dfn or an operator-derived function can (e.g. `raw f g` where
-  `g` is meant to be "the parser to use") — `Fff._WithParsed` dispatches
-  on a character-vector selector (`'FindFiles'`/`'Grep'`) via `:Select`
-  instead of taking a function reference.
+- **A named traditional function can't be passed as a plain value**
+  in an ordinary expression (there's no first-class function value to
+  hand to another function as data) — but it *can* be passed as an
+  **operand to an operator**, which is exactly the mechanism APL gives
+  for this. `Fff._WithParsed` is a traditional operator taking the
+  parser (`_ParseFindFiles`/`_ParseGrep`) as its operand:
+  `(_ParseFindFiles _WithParsed)raw` — no string-selector dispatch
+  needed. (An initial version used a `'FindFiles'`/`'Grep'` selector
+  string with `:Select` instead, before noticing operators were the
+  actual tool for the job.)

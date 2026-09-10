@@ -51,7 +51,7 @@
       (query opts)←_SplitArgs args
       arguments←⎕NS(query:query)opts
       raw←h.Mcp #.Mcp.CallTool('find_files' arguments)
-      result←raw _WithParsed'FindFiles'
+      result←(_ParseFindFiles _WithParsed)raw
     ∇
 
     ∇ result←h Grep args
@@ -61,7 +61,7 @@
       (query opts)←_SplitArgs args
       arguments←⎕NS(query:query)opts
       raw←h.Mcp #.Mcp.CallTool('grep' arguments)
-      result←raw _WithParsed'Grep'
+      result←(_ParseGrep _WithParsed)raw
     ∇
 
     ∇ result←h MultiGrep args
@@ -71,7 +71,7 @@
       (patterns opts)←_SplitArgs args
       arguments←⎕NS(patterns:patterns)opts
       raw←h.Mcp #.Mcp.CallTool('multi_grep' arguments)
-      result←raw _WithParsed'Grep' ⍝ same per-file/per-line shape as grep
+      result←(_ParseGrep _WithParsed)raw ⍝ same per-file/per-line shape as grep
     ∇
 
     ∇ (primary opts)←_SplitArgs args
@@ -82,11 +82,12 @@
       :EndIf
     ∇
 
-    ∇ result←raw _WithParsed kind
-      ⍝ kind: 'FindFiles' or 'Grep' — which parser to run. Always
-      ⍝ keeps Raw/Text; only attempts to parse when the tool didn't
-      ⍝ itself report an error (fff-mcp's error text has no documented
-      ⍝ shape, so we don't guess at it).
+    ∇ result←(parser _WithParsed)raw
+      ⍝ parser: a monadic function operand (_ParseFindFiles or
+      ⍝ _ParseGrep) run on the tool's text content. Always keeps
+      ⍝ Raw/Text; only attempts to parse when the tool didn't itself
+      ⍝ report an error (fff-mcp's error text has no documented shape,
+      ⍝ so we don't guess at it).
       text←''
       :If 0≠≢raw.content ⋄ text←(⊃raw.content).text ⋄ :EndIf
       parsed←()
@@ -94,14 +95,9 @@
       ⍝ not 0/1 — disclose before testing.
       :If ~(⊃raw.isError)≡'true'
           :Trap 0
-              :Select kind
-              :Case 'FindFiles'
-                  parsed←_ParseFindFiles text
-              :Case 'Grep'
-                  parsed←_ParseGrep text
-              :EndSelect
+              parsed←parser text
           :Else
-              ⍝ text didn't match the shapes this parser recognizes —
+              ⍝ text didn't match the shape this parser recognizes —
               ⍝ Raw/Text are still there for the caller to fall back on.
           :EndTrap
       :EndIf
