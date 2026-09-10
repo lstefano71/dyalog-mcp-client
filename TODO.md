@@ -215,14 +215,15 @@ Still open:
   handling once tested against a server that actually negotiates down.
 
 - ~~**Preserve JSON-RPC error detail on Mcp-layer signals**~~ — done
-  (Phase 7, ADR D18). `⎕SIGNAL`'s name/value form turned out to be the
-  wrong vehicle: it can only override names a system-generated `⎕DMX`
-  already defines, so there's nowhere in the signal to put a payload of
-  our own. Instead the `code` (and `data`, when present) are folded
-  into the signalled message text, and the whole error object is
-  stashed on `h.LastError` for a caller that needs to branch on the
-  code rather than just report it. Verified against the real fff-mcp's
-  own `¯32602` invalid-params path (`test/14`).
+  (Phase 7, ADR D18/D19). `⎕SIGNAL`'s name/value form can only set
+  names a system-generated `⎕DMX` already defines, so there's nowhere
+  in the signal to put a *structured* payload of our own. So the `code`
+  (and `data`, when present) are folded into `⎕DMX.Message` — with
+  `⎕DMX.EM` left as the short verb label, per D19's house convention
+  for every signal here — and the whole error object is stashed on
+  `h.LastError` for a caller that needs to branch on the code rather
+  than just report it. Verified against the real fff-mcp's own `¯32602`
+  invalid-params path (`test/14`).
 
 ## Documentation
 

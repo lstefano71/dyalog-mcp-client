@@ -12,7 +12,8 @@ h←opts Shell.Start,⊂exe
     2 Shell.Receive h
     ⎕←'FAIL: expected a timeout signal'
 :Else
-    ⎕←'timeout signaled ok: ',⎕DM
+    ⍝ EM is the short "which verb" label, Message the detail (ADR D19).
+    ⎕←'timeout signaled ok: ',⎕DMX.(EM,': ',Message)
 :EndTrap
 
 Shell.Stop h
@@ -25,7 +26,7 @@ Shell.Stop h ⍝ must be safe to call twice
     h Shell.Send '{}'
     ⎕←'FAIL: expected a not-running signal'
 :Else
-    ⎕←'send-after-stop signaled ok: ',⎕DM
+    ⎕←'send-after-stop signaled ok: ',⎕DMX.(EM,': ',Message)
 :EndTrap
 
 ⎕OFF

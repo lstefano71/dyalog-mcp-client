@@ -113,12 +113,15 @@ JsonRpcCl.Disconnect hcl
 ⍝ --- 5. JSON-RPC error code/data survive an Mcp-layer signal --------
 ⍝ Mcp.ListTools/CallTool used to signal with resp.error.message alone,
 ⍝ dropping `code` (and `data`) entirely. ⎕SIGNAL can't carry a
-⍝ structured payload of its own — it can only override names ⎕DMX
-⍝ already defines — so the code goes into the message text for a human
-⍝ and the whole error object onto h.LastError for a caller that needs
-⍝ to branch on it. Verified against the real fff-mcp, whose
-⍝ missing-required-argument path is a genuine ¯32602 invalid-params
-⍝ error rather than a fixture's imitation of one.
+⍝ structured payload of its own — it can only set names ⎕DMX already
+⍝ defines — so the code goes into the signalled text for a human and
+⍝ the whole error object onto h.LastError for a caller that needs to
+⍝ branch on it. The text is split across the two ⎕DMX names that DO
+⍝ exist (ADR D19): EM is the short, stable verb label and Message the
+⍝ unbounded server-supplied detail, so the two are asserted
+⍝ separately here rather than by searching one blob. Verified against
+⍝ the real fff-mcp, whose missing-required-argument path is a genuine
+⍝ ¯32602 invalid-params error rather than a fixture's imitation.
 exe←'C:\Users\stf\AppData\Local\fff-mcp\bin\fff-mcp.exe'
 h←(WorkingDir:'D:\devel\mcp-client')Mcp.Connect,⊂exe
 nFail+←(⍬≡h.LastError)Check'LastError should start empty'
@@ -126,13 +129,34 @@ nFail+←(⍬≡h.LastError)Check'LastError should start empty'
     {}h Mcp.CallTool'find_files' ⍝ no query given: invalid params
     nFail+←0 Check'expected a signal for missing required arguments'
 :Else
-    ⎕←'CallTool error signalled: ',⎕DMX.EM
-    nFail+←(∨/'code ¯32602'⍷⎕DMX.EM)Check'the signalled message should name the JSON-RPC code'
+    ⎕←'CallTool error signalled: EM=[',⎕DMX.EM,'] Message=[',⎕DMX.Message,']'
+    nFail+←('Mcp.CallTool'≡⎕DMX.EM)Check'EM should be the short verb label, nothing else'
+    nFail+←(∨/'code ¯32602'⍷⎕DMX.Message)Check'Message should name the JSON-RPC code'
+    nFail+←(∨/'missing field'⍷⎕DMX.Message)Check'Message should keep the server''s own wording'
 :EndTrap
 ⎕←'LastError.code=',⍕h.LastError.code
 nFail+←(¯32602≡h.LastError.code)Check'LastError should carry the structured error code'
 nFail+←(0≠≢h.LastError.message)Check'LastError should carry the message too'
 Mcp.Disconnect h
+
+⍝ --- 5b. A long detail survives the signal intact -------------------
+⍝ The reason the detail lives in Message and not in EM (ADR D19): it can
+⍝ be server-supplied and arbitrarily long. JsonRpc's malformed-JSON path
+⍝ embeds the whole offending line, so the fixture's `garbage` mode with
+⍝ a large `size` is a genuine end-to-end probe of that — 8000 characters
+⍝ of unparseable line, all of which must come back out of ⎕DMX.Message
+⍝ while EM stays exactly the short label.
+h←(Timeout:5)JsonRpc.Connect fixture
+:Trap 999
+    {}h JsonRpc.Call('garbage'(size:8000))
+    nFail+←0 Check'expected a malformed-JSON signal'
+:Else
+    ⎕←'long garbage: EM=[',⎕DMX.EM,'] Message length=',⍕≢⎕DMX.Message
+    nFail+←('JsonRpc'≡⎕DMX.EM)Check'EM should stay the short label however long the detail is'
+    nFail+←(8000≤≢⎕DMX.Message)Check'the whole offending line should survive in Message'
+    nFail+←(∨/'malformed JSON from server'⍷⎕DMX.Message)Check'Message should still say what went wrong'
+:EndTrap
+JsonRpc.Disconnect h
 
 ⍝ --- 6. Multiple concurrent child processes in one interpreter ------
 ⍝ Each Start/Connect takes its own ⎕TALLOC token range, so this was

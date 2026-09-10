@@ -19,10 +19,14 @@ Methods:
   crash(code)             -> exits the process immediately with the
                              given code (default 1) instead of ever
                              writing a response line. `code` optional.
-  garbage()               -> writes one line of deliberately invalid
+  garbage(size)           -> writes one line of deliberately invalid
                              JSON (not parseable at all) instead of a
                              real response, then continues serving
-                             later requests normally.
+                             later requests normally. `size` optional:
+                             pads the bad line out to roughly that many
+                             characters, so a client can be tested
+                             against a LONG unparseable line as well as
+                             a short one.
   hang()                  -> never responds, ever — blocks forever
                              (⎕TGET on the client side must time out).
                              Deliberately a DEDICATED method rather than
@@ -77,8 +81,16 @@ def _crash(params):
 
 @method("garbage")
 def _garbage(params):
-    # Not valid JSON by construction — an unterminated object.
-    print('{"jsonrpc": "2.0", "id": totally not json', flush=True)
+    # Not valid JSON by construction — an unterminated object. `size`
+    # (optional) pads it out to roughly that many characters, so a client
+    # can check how it handles a *long* unparseable line — the whole line
+    # ends up inside the signalled error, and how much of it survives is
+    # exactly the question ADR D19 is about.
+    line = '{"jsonrpc": "2.0", "id": totally not json'
+    size = params.get("size", 0)
+    if size > len(line):
+        line += " " + "q" * (size - len(line) - 1)
+    print(line, flush=True)
     return _NO_RESPONSE
 
 

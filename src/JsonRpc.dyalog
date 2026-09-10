@@ -179,7 +179,10 @@
           :Trap 0
               raw←⎕JSON line
           :Else
-              ('JsonRpc: malformed JSON from server: ',line)⎕SIGNAL 999
+              ⍝ `line` is server-supplied and can be arbitrarily long,
+              ⍝ which is exactly why it belongs in Message rather than
+              ⍝ EM — see Shell._Err and ADR D19.
+              ⎕SIGNAL'JsonRpc'_Err('malformed JSON from server: ',line)
           :EndTrap
           :If 0<⍴⍴raw ⍝ a batch (JSON array of objects) is rank 1, not a scalar ref
               h.Inbox←,raw
@@ -194,6 +197,12 @@
     ∇ msg←h _Envelope args
       (method params)←_ParseArgs args
       msg←(jsonrpc:'2.0' ⋄ method:method ⋄ params:params)
+    ∇
+
+    ∇ spec←label _Err detail
+      ⍝ See Shell._Err — same house convention (ADR D19), duplicated
+      ⍝ rather than shared so each layer stays ⎕FIX-able on its own.
+      spec←⊂('EN' 999)('EM' label)('Message' detail)
     ∇
 
     ∇ (method params)←_ParseArgs args

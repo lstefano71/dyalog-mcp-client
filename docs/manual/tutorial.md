@@ -110,7 +110,7 @@ h.Timeout←2
     h JsonRpc.Call('sleep'(seconds:5))
     ⎕←'FAIL: expected timeout'
 :Else
-    ⎕←'sleep timeout signaled ok: ',⎕DM
+    ⎕←'sleep timeout signaled ok: ',⎕DMX.(EM,': ',Message)
 :EndTrap
 
 JsonRpc.Disconnect h

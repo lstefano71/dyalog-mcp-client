@@ -23,7 +23,7 @@ result←h Mcp.CallTool('find_files'(query:'Mcp'))
     h Mcp.CallTool'find_files' ⍝ no query given
     ⎕←'FAIL: expected a signal for missing required arguments'
 :Else
-    ⎕←'missing-args call signaled ok: ',⎕DM
+    ⎕←'missing-args call signaled ok: ',⎕DMX.(EM,': ',Message)
 :EndTrap
 
 ⍝ Protocol-level failure must signal, not come back as data.
@@ -31,7 +31,7 @@ result←h Mcp.CallTool('find_files'(query:'Mcp'))
     h Mcp.CallTool('not_a_real_tool'(query:'x'))
     ⎕←'FAIL: expected a signal for an unknown tool'
 :Else
-    ⎕←'unknown tool signaled ok: ',⎕DM
+    ⎕←'unknown tool signaled ok: ',⎕DMX.(EM,': ',Message)
 :EndTrap
 
 Mcp.Disconnect h

@@ -47,11 +47,29 @@
       h.Tid←_Run&h ⍝ needs h to already exist, so can't join the literal above
     ∇
 
+    ∇ spec←label _Err detail
+      ⍝ Builds the right argument for ⎕SIGNAL's structured (name/value)
+      ⍝ form, the house convention across every layer here (ADR D19):
+      ⍝ EM carries the short, stable "which verb signalled this" label
+      ⍝ and Message the detail, which may be long and may contain text
+      ⍝ the server chose. An untrapped signal still displays as
+      ⍝ "<label>: <detail>", exactly as the older
+      ⍝ `('label: detail')⎕SIGNAL 999` form did, so nothing about the
+      ⍝ visible output changes — but a caller can now match on the two
+      ⍝ halves independently instead of substring-searching one blob.
+      ⍝
+      ⍝ ⎕SIGNAL itself deliberately stays at each call site rather than
+      ⍝ moving in here: it cuts the SI back to exit the function
+      ⍝ CONTAINING it, so signalling from this helper would report every
+      ⍝ error against this helper's own line instead of the caller's.
+      spec←⊂('EN' 999)('EM' label)('Message' detail)
+    ∇
+
     ∇ {r}←h Send text
       ⍝ Push one line of text to the child's stdin. text must not
       ⍝ contain embedded newlines (NDJSON framing requirement).
       :If h.Status≢'Running'
-          ('Shell.Send: process is not running (status: ',h.Status,')')⎕SIGNAL 999
+          ⎕SIGNAL'Shell.Send'_Err('process is not running (status: ',h.Status,')')
       :EndIf
       ('Array' text 'UTF-8')⎕TPUT h.InTok
       r←⍬
@@ -68,10 +86,10 @@
               :Return
           :EndIf
           :If h.Status≡'Exited'
-              ('Shell.Receive: process exited (reason ',(⍕h.ExitReason),', code ',(⍕h.ExitCode),')')⎕SIGNAL 999
+              ⎕SIGNAL'Shell.Receive'_Err('process exited (reason ',(⍕h.ExitReason),', code ',(⍕h.ExitCode),')')
           :EndIf
           :If 0=≢timeout ⎕TGET h.SigTok
-              'Shell.Receive: timed out waiting for output'⎕SIGNAL 999
+              ⎕SIGNAL'Shell.Receive'_Err'timed out waiting for output'
           :EndIf
       :EndRepeat
     ∇

@@ -36,7 +36,7 @@
       :If 0≠⎕NC'resp.error'
           ⍝ No handle to stash LastError on — Connect is failing, so the
           ⍝ caller never receives one; the code/data are in the message.
-          (_RpcErrorText('Mcp.Connect: server rejected initialize' resp.error))⎕SIGNAL 999
+          ⎕SIGNAL'Mcp.Connect'_Err('server rejected initialize: ',_RpcErrorDetail resp.error)
       :EndIf
       jr #.JsonRpc.Notify'notifications/initialized'
       jr.ToolsStale←0
@@ -49,17 +49,27 @@
       )
     ∇
 
-    ∇ msg←_RpcErrorText args
-      ⍝ args: (prefix errorObject). Builds the text to signal for a
-      ⍝ protocol-level JSON-RPC error. The error's `code` (and `data`,
-      ⍝ when the server sent one) used to be dropped on the floor here,
-      ⍝ leaving only `message` — see ADR D18. Both are folded into the
-      ⍝ text so a human reading the signal sees them; a caller that
-      ⍝ needs to BRANCH on the code reads h.LastError instead, since
-      ⍝ ⎕SIGNAL can only override names ⎕DMX already defines and has
-      ⍝ nowhere to carry a structured payload of our own.
-      (prefix err)←args
-      msg←prefix,': ',err.message
+    ∇ spec←label _Err detail
+      ⍝ See Shell._Err — same house convention (ADR D19).
+      spec←⊂('EN' 999)('EM' label)('Message' detail)
+    ∇
+
+    ∇ msg←_RpcErrorDetail err
+      ⍝ err: a JSON-RPC error object. Builds the Message half of the
+      ⍝ signal for a protocol-level failure. The error's `code` (and
+      ⍝ `data`, when the server sent one) used to be dropped on the
+      ⍝ floor here, leaving only `message` — see ADR D18. Both are
+      ⍝ folded into the text so a human reading the signal sees them; a
+      ⍝ caller that needs to BRANCH on the code reads h.LastError
+      ⍝ instead, since even the structured ⎕SIGNAL form can only set
+      ⍝ names ⎕DMX already defines and so has nowhere to carry a
+      ⍝ payload of our own (ADR D19).
+      ⍝
+      ⍝ Everything this returns is server-supplied and unbounded —
+      ⍝ `message` is whatever the server wrote, and `data` can be an
+      ⍝ arbitrarily large JSON value — which is precisely why it goes
+      ⍝ into Message rather than into EM.
+      msg←err.message
       code←err ⎕VGET⊂'code' ⍬
       :If 0≠≢code
           msg,←' (JSON-RPC code ',(⍕code),')'
@@ -95,7 +105,7 @@
       resp←h.JsonRpc #.JsonRpc.Call'tools/list'
       :If 0≠⎕NC'resp.error'
           h.LastError←resp.error
-          (_RpcErrorText('Mcp.ListTools' resp.error))⎕SIGNAL 999
+          ⎕SIGNAL'Mcp.ListTools'_Err _RpcErrorDetail resp.error
       :EndIf
       tools←resp.result.tools
       h.JsonRpc.ToolsStale←0 ⍝ a fresh list was just fetched — see the ToolsStale note above
@@ -114,7 +124,7 @@
       resp←h.JsonRpc #.JsonRpc.Call('tools/call'(name:name ⋄ arguments:arguments))
       :If 0≠⎕NC'resp.error'
           h.LastError←resp.error
-          (_RpcErrorText('Mcp.CallTool' resp.error))⎕SIGNAL 999
+          ⎕SIGNAL'Mcp.CallTool'_Err _RpcErrorDetail resp.error
       :EndIf
       result←resp.result
     ∇

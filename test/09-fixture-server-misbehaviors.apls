@@ -24,7 +24,7 @@ h←JsonRpc.Connect cmd
     r←h JsonRpc.Call('crash'(code:3))
     ⎕←'FAIL: expected a signal, got a response instead'
 :Else
-    ⎕←'crash -> signaled ok: ',⎕DM
+    ⎕←'crash -> signaled ok: ',⎕DMX.(EM,': ',Message)
     ⎕←'  Shell.Status after crash=',h.Shell.Status
     ⎕←'  Shell.ExitCode after crash=',⍕h.Shell.ExitCode
 :EndTrap
@@ -36,7 +36,9 @@ h←JsonRpc.Connect cmd
     r←h JsonRpc.Call'garbage'
     ⎕←'FAIL: expected a signal, got a response instead'
 :Else
-    ⎕←'garbage -> signaled ok: ',⎕DM
+    ⍝ The malformed line itself is in Message, not EM — it's
+    ⍝ server-supplied and unbounded (ADR D19).
+    ⎕←'garbage -> signaled ok: ',⎕DMX.(EM,': ',Message)
 :EndTrap
 ⍝ The process itself is still alive (only the response line was bad) —
 ⍝ confirm the connection can still be used/torn down cleanly.
@@ -57,7 +59,7 @@ h.Timeout←2
     r←h JsonRpc.Call'hang'
     ⎕←'FAIL: expected a timeout signal'
 :Else
-    ⎕←'hang -> timeout signaled ok: ',⎕DM
+    ⎕←'hang -> timeout signaled ok: ',⎕DMX.(EM,': ',Message)
 :EndTrap
 Shell.Stop h.Shell
 ⎕←'  force-killed=',(⍕h.Shell.Killed),' Status after Stop=',h.Shell.Status

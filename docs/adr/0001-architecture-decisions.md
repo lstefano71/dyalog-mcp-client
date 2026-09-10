@@ -999,10 +999,11 @@ override names that a system-generated `⎕DMX` **already defines**
 `DOMAIN ERROR` — so there is simply nowhere in the signal itself to
 put a structured payload of our own. Hence a deliberate split:
 
-- The **message text** gains ` (JSON-RPC code <n>)`, and
+- The **signalled text** gains ` (JSON-RPC code <n>)`, and
   `, data: <json>` when the server sent a `data` member, so a human
-  reading the signal (or a test asserting on `⎕DMX.EM`) sees the code
-  without extra work.
+  reading the signal sees the code without extra work. (D19 later moved
+  that text from `⎕DMX.EM` into `⎕DMX.Message`, leaving `EM` as the
+  short verb label — the displayed error is unchanged either way.)
 - The **whole error object** is stashed on `h.LastError` for a caller
   that needs to *branch* on the code rather than report it — which was
   the actual open request in `TODO.md`.
@@ -1034,3 +1035,91 @@ two twins in sync as D13 intended. The real proof for the force-kill
 is external to APL and worth stating explicitly: `Get-Process python`
 reports **zero** surviving processes after the run, where before this
 phase the same run would leave the hung one behind indefinitely.
+
+### D19. Signals use `⎕SIGNAL`'s structured form: `EM` = label, `Message` = detail
+
+Every layer here used the simplest possible signal shape:
+`('Layer.Verb: some detail')⎕SIGNAL 999`, which puts the whole string
+into `⎕DMX.EM` and leaves `⎕DMX.Message` empty. That is one blob, and
+the blob mixes two very different things: a short label that *we* chose
+and that a caller might reasonably compare against, and detail that is
+often unbounded and often not ours at all — `JsonRpc`'s
+malformed-JSON path embeds the entire offending line, and `Mcp`'s error
+path embeds the server's own `message` plus a `data` member that can be
+any JSON value at all.
+
+Dyalog's `⎕SIGNAL` has a second, structured form for exactly this: a
+vector of name/value pairs overriding the defaults in the new `⎕DMX`
+(see the `⎕SIGNAL` page's Example 2). All signals in this repo now use
+it:
+
+```apl
+⎕SIGNAL⊂('EN' 999)('EM' 'Mcp.CallTool')('Message' detail)
+```
+
+with a four-line private `_Err` per namespace to build the right
+argument, so each call site reads
+`⎕SIGNAL'Mcp.CallTool'_Err detail`.
+
+Three things about this were worth establishing by experiment rather
+than assumption, and all three shaped the result:
+
+**`EM` *is* assignable.** The doc's own Example 2 only sets `EN`,
+`Vendor` and `Message` — leaving `EM` derived from `EN` as
+`'ERROR 999'`, which would have been a real loss of information. It
+turns out `EM` can be set directly, so the label survives where it
+belongs. (`InternalLocation` and `DM` are the names that genuinely
+can't be set.)
+
+**The visible output does not change.** An untrapped structured signal
+displays as `EM: Message` — `Mcp.CallTool: tool not found (JSON-RPC
+code ¯32602)`, character for character what the old single-string form
+produced. So this is a refactor of the *structure* of an error, not of
+what anyone sees.
+
+**A left argument and name/value pairs cannot be combined** —
+`'label'⎕SIGNAL⊂('EN' 999)('Message' detail)` is a `DOMAIN ERROR`
+("Cannot provide a left argument with the given right argument"). It's
+one form or the other.
+
+**`⎕SIGNAL` stays at the call site.** `_Err` only builds data; it never
+signals. This is not stylistic: `⎕SIGNAL` cuts the SI back to *exit the
+function containing it*, so signalling from inside a shared helper
+would report every error against the helper's own line instead of the
+caller's. Keeping `⎕SIGNAL` inline preserves the existing (and much
+more useful) behaviour where, say, a failed `Mcp.CallTool` points at
+the user's own calling line. The same rule is why a `:Trap` in the
+function that calls `⎕SIGNAL` cannot catch it — worth knowing when
+writing a test for one.
+
+**On the size limit.** The motivation for this change was that the
+left-argument form has a length limit which the `Message` field does
+not share. That limit could not be reproduced on Dyalog 20.0: strings
+up to 200,000 characters came back out of `⎕DMX.EM` intact, whether
+supplied as `⎕SIGNAL`'s left argument or assigned to `EM` in the
+structured form, and `⎕DM`'s first element matched. So the change is
+not recorded here as fixing an observed truncation. It is still the
+right shape, for reasons that hold regardless: `EM` is a *label* by
+design (that is what the standard event messages are), the detail is
+the part that is unbounded and server-supplied, and splitting them lets
+a caller match on the stable half without substring-searching the
+volatile one. Any limit that does exist — in an older interpreter, a
+different display path, or somewhere not exercised here — now applies
+only to text this repo controls and keeps short.
+
+**Consequences for callers.** `⎕DM`'s first element is `EM` alone, not
+`EM: Message`, so anything that used to print `⎕DM` to show a signalled
+message now shows only the label. Every test that did so prints
+`⎕DMX.(EM,': ',Message)` instead, and the Manual says so explicitly.
+`test/14` now asserts the two halves *separately* — `EM` equal to
+`'Mcp.CallTool'`, `Message` containing the code and the server's own
+wording — which is a strictly better test than the previous single
+substring search, since it would catch detail leaking into the label or
+vice versa.
+
+**Testing.** The fixture server's `garbage` mode gained an optional
+`size`, padding its unparseable line out to a requested length, so
+`test/14` can drive an 8000-character detail end to end through
+`JsonRpc`'s malformed-JSON path: `EM` comes back as exactly `'JsonRpc'`
+and `Message` at 8028 characters with the offending line whole. The
+full suite (`test/01`–`14`) was re-run afterwards.

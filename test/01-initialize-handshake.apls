@@ -26,7 +26,7 @@ h Shell.Send line
     ⎕←'parsed ok:'
     ⎕←parsed
 :Else
-    ⎕←'ERROR: ',⎕DM
+    ⎕←'ERROR: ',⎕DMX.(EM,': ',Message)
 :EndTrap
 
 Shell.Stop h

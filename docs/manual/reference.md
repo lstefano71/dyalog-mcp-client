@@ -21,6 +21,56 @@ notation).
 
 ---
 
+## How every layer signals
+
+Two rules hold everywhere, and knowing them saves reading each verb's
+own note:
+
+**What signals, and what doesn't** (ADR D6). A genuine *fault* —
+crashed process, timeout, malformed or protocol-broken data — signals
+event `999`. A JSON-RPC `error` *response* is ordinary successful return
+data and never signals: check `resp.error`/`resp.result` yourself.
+`Mcp`/`Lsp` are the exception by design, since a protocol-level failure
+there (unknown tool, invalid params) means the call cannot be satisfied
+at all — those do signal.
+
+**How the text is arranged** (ADR D19). Every signal is raised in the
+structured `⎕SIGNAL` form, splitting the text across the two `⎕DMX`
+names that exist for it:
+
+| `⎕DMX` name | Holds | Example |
+| --- | --- | --- |
+| `EN` | always `999` | `999` |
+| `EM` | the short, stable label for the verb that signalled | `'Mcp.CallTool'` |
+| `Message` | the detail — may be long, and may contain text the server chose | `'tool not found (JSON-RPC code ¯32602)'` |
+
+An untrapped signal still *displays* as `EM: Message`, so nothing looks
+different at the session:
+
+```
+Mcp.CallTool: tool not found (JSON-RPC code ¯32602)
+```
+
+Handling one, match the halves separately — `EM` is the part safe to
+compare against, since it's ours and it's stable; `Message` is where
+server-supplied text lands:
+
+```apl
+:Trap 999
+    {}h Mcp.CallTool'find_files'
+:Else
+    :If 'Mcp.CallTool'≡⎕DMX.EM
+        ⎕←'call failed: ',⎕DMX.Message
+    :EndIf
+:EndTrap
+```
+
+Note `⎕DM`'s first element is `EM` alone, *not* `EM: Message` — so
+`⎕←⎕DM` shows only the label. Use `⎕DMX.(EM,': ',Message)` when you want
+the whole thing, as this repo's own tests do.
+
+---
+
 ## `Shell` — bidirectional stdio wrapper around `⎕SHELL`
 
 The foundation layer: starts a child process, feeds it lines, hands
@@ -75,7 +125,7 @@ read, or if the timeout elapses first.
     2 Shell.Receive h
     ⎕←'FAIL: expected a timeout signal'
 :Else
-    ⎕←'timeout signaled ok: ',⎕DM
+    ⎕←'timeout signaled ok: ',⎕DMX.(EM,': ',Message)
 :EndTrap
 ```
 (`test/03-lifecycle-edge-cases.apls`)
@@ -356,7 +406,7 @@ result←h Mcp.CallTool('find_files'(query:'Mcp'))
     h Mcp.CallTool'find_files' ⍝ no query given
     ⎕←'FAIL: expected a signal for missing required arguments'
 :Else
-    ⎕←'missing-args call signaled ok: ',⎕DM
+    ⎕←'missing-args call signaled ok: ',⎕DMX.(EM,': ',Message)
 :EndTrap
 ```
 (`test/05-mcp-roundtrip.apls`)
@@ -364,19 +414,19 @@ result←h Mcp.CallTool('find_files'(query:'Mcp'))
 ### Reading a protocol-level error's detail
 
 `ListTools`/`CallTool` fold the JSON-RPC error's `code` (and `data`, if
-the server sent one) into the message they signal with, and put the
-whole error object on `h.LastError` — `⎕SIGNAL` can only override names
-`⎕DMX` already defines, so it has nowhere to carry a structured payload
-of its own (ADR D18). Read the message to *report* the failure; read
-`h.LastError` to *branch* on it.
+the server sent one) into `⎕DMX.Message`, and put the whole error object
+on `h.LastError` — `⎕SIGNAL` can only set names `⎕DMX` already defines,
+so it has nowhere to carry a structured payload of its own (ADR D18/D19).
+Read `Message` to *report* the failure; read `h.LastError` to *branch*
+on it.
 
 ```apl
 :Trap 999
     {}h Mcp.CallTool'find_files'  ⍝ no query given
 :Else
-    ⎕←⎕DMX.EM
-    ⍝ Mcp.CallTool: failed to deserialize parameters: missing field
-    ⍝ `query` (JSON-RPC code ¯32602)
+    ⎕←⎕DMX.EM       ⍝ Mcp.CallTool
+    ⎕←⎕DMX.Message  ⍝ failed to deserialize parameters: missing field
+                    ⍝ `query` (JSON-RPC code ¯32602)
 :EndTrap
 ⎕←'code=',⍕h.LastError.code   ⍝ ¯32602
 ```
@@ -613,7 +663,7 @@ h.Timeout←2
     h JsonRpcCl.Call('sleep'(seconds:5))
     ⎕←'FAIL: expected timeout'
 :Else
-    ⎕←'sleep timeout signaled ok: ',⎕DM
+    ⎕←'sleep timeout signaled ok: ',⎕DMX.(EM,': ',Message)
 :EndTrap
 ```
 (`test/08-jsonrpccl-toy-server.apls`)

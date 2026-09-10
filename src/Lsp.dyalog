@@ -28,7 +28,7 @@
       params←(processId:⊂'null' ⋄ rootUri:⊂'null' ⋄ capabilities:())
       resp←jr #.JsonRpcCl.Call('initialize' params)
       :If 0≠⎕NC'resp.error'
-          ('Lsp.Connect: server rejected initialize: ',resp.error.message)⎕SIGNAL 999
+          ⎕SIGNAL'Lsp.Connect'_Err('server rejected initialize: ',resp.error.message)
       :EndIf
       ⍝ Unlike MCP's notifications/initialized, LSP's equivalent is
       ⍝ literally named 'initialized', with an (empty) params object,
@@ -100,9 +100,14 @@
       params←(textDocument:(uri:uri) ⋄ position:(line:line ⋄ character:character))
       resp←h.JsonRpcCl #.JsonRpcCl.Call('textDocument/hover' params)
       :If 0≠⎕NC'resp.error'
-          ('Lsp.Hover: ',resp.error.message)⎕SIGNAL 999
+          ⎕SIGNAL'Lsp.Hover'_Err resp.error.message
       :EndIf
       result←resp.result
+    ∇
+
+    ∇ spec←label _Err detail
+      ⍝ See Shell._Err — same house convention (ADR D19).
+      spec←⊂('EN' 999)('EM' label)('Message' detail)
     ∇
 
 :EndNamespace

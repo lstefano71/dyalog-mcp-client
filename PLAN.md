@@ -45,8 +45,14 @@ D18:
 - **JSON-RPC error detail preserved.** `Mcp.ListTools`/`CallTool` fold
   the error's `code` (and `data`) into the signalled message, and stash
   the whole error object on `h.LastError` for a caller that needs to
-  branch on the code — `⎕SIGNAL` itself can only override names `⎕DMX`
+  branch on the code — `⎕SIGNAL` itself can only set names `⎕DMX`
   already defines, so it had nowhere to carry a structured payload.
+- **All signals restructured** (ADR D19, a follow-on refactor): every
+  layer now signals via `⎕SIGNAL`'s structured name/value form, with
+  `EM` holding the short verb label and `Message` the detail — which is
+  where unbounded, server-supplied text belongs. The displayed error is
+  unchanged (`EM: Message`); `⎕DM` alone now shows only the label, so
+  tests and the Manual read `⎕DMX.(EM,': ',Message)`.
 - **Multiple concurrent children: verified, no code change.** Three
   NDJSON children plus one Content-Length child, all mid-flight at
   once, each getting back its own answer; token bases distinct as

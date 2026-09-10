@@ -174,10 +174,10 @@
               :Continue
           :EndIf
           :If h.Status≡'Exited'
-              ('JsonRpcCl: process exited (reason ',(⍕h.ExitReason),', code ',(⍕h.ExitCode),')')⎕SIGNAL 999
+              ⎕SIGNAL'JsonRpcCl'_Err('process exited (reason ',(⍕h.ExitReason),', code ',(⍕h.ExitCode),')')
           :EndIf
           :If 0=≢h.Timeout ⎕TGET h.SigTok
-              'JsonRpcCl: timed out waiting for a response'⎕SIGNAL 999
+              ⎕SIGNAL'JsonRpcCl'_Err'timed out waiting for a response'
           :EndIf
       :EndRepeat
     ∇
@@ -214,7 +214,7 @@
 
     ∇ {r}←h _Send msg
       :If h.Status≢'Running'
-          ('JsonRpcCl.Send: process is not running (status: ',h.Status,')')⎕SIGNAL 999
+          ⎕SIGNAL'JsonRpcCl.Send'_Err('process is not running (status: ',h.Status,')')
       :EndIf
       body←⎕JSON msg
       crlf←⎕UCS 13 10
@@ -235,6 +235,11 @@
       :Else
           (method params)←args
       :EndIf
+    ∇
+
+    ∇ spec←label _Err detail
+      ⍝ See Shell._Err — same house convention (ADR D19).
+      spec←⊂('EN' 999)('EM' label)('Message' detail)
     ∇
 
     ∇ {r}←_Run h
@@ -347,7 +352,7 @@
           :EndIf
       :EndFor
       :If len<0
-          'JsonRpcCl: message header block has no Content-Length'⎕SIGNAL 999
+          ⎕SIGNAL'JsonRpcCl'_Err'message header block has no Content-Length'
       :EndIf
     ∇
 
