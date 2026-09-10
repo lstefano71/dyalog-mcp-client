@@ -22,10 +22,11 @@
           ('Mcp.Connect: server rejected initialize: ',resp.error.message)⎕SIGNAL 999
       :EndIf
       jr #.JsonRpc.Notify'notifications/initialized'
-      h←⎕NS''
-      h.JsonRpc←jr
-      h.ServerInfo←resp.result.serverInfo
-      h.ServerCapabilities←resp.result.capabilities
+      h←(
+        JsonRpc:jr
+        ⋄ ServerInfo:resp.result.serverInfo
+        ⋄ ServerCapabilities:resp.result.capabilities
+      )
     ∇
 
     ∇ {r}←Disconnect h
@@ -49,7 +50,7 @@
       ⍝ tool that ran but failed comes back as ordinary data — check
       ⍝ result.isError, per the MCP spec's own distinction.
       :If 1=≡args
-          name←args ⋄ arguments←⎕NS''
+          name←args ⋄ arguments←()
       :Else
           (name arguments)←args
       :EndIf

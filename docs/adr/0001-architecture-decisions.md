@@ -162,3 +162,35 @@ untested surface. See TODO.md.
   calling into `Shell`) is *not* visible under its bare name the way it
   would be from an unscripted/dynamically-scoped namespace — it must be
   written `#.Shell.Start`, not `Shell.Start`.
+
+### D10. Handle construction: array-notation literals + `⎕NS`/`⎕VGET` for defaults
+
+Handles are built as a single array-notation namespace literal wherever
+possible, rather than `h←⎕NS'' ⋄ h.Field←value ⋄ h.Field2←value2 ⋄ ...`
+chains — the incremental-assignment style was the original v1 code but is
+harder to see the whole shape of at a glance. Two Dyalog 20 features make
+this practical for the "optional overrides on top of defaults" cases that
+motivated the old chains:
+
+- `⎕NS defaults opts` merges a vector of namespaces left-to-right, later
+  namespaces winning on conflicting names — so `defaults` merged with a
+  caller-supplied `opts` is a one-liner instead of a field-by-field
+  `:If 0≠⎕NC'opts.X' ⋄ h.X←opts.X ⋄ :EndIf` chain.
+- `opts ⎕VGET ⊂'Field' fallback` reads one optional field with a fallback
+  if it's undefined — used where only a single field needs defaulting
+  (e.g. `Timeout`, `WorkingDir`), rather than pulling in a full merge for
+  one value.
+
+A field that can only be computed *after* the handle exists (e.g.
+`Shell.Start`'s `Tid←_Run&h`, which spawns a thread that needs `h` as its
+argument) is necessarily still a separate assignment after the literal —
+that's an ordering constraint, not a style regression.
+
+Plain `⎕NS''` used only to mean "an empty namespace" (e.g. a default
+`opts`, or empty tool-call `arguments`) is written `()` instead — Dyalog
+20 array notation's literal empty-namespace form — since it's shorter and
+reads the same as every other namespace literal in the codebase.
+
+(`⎕VGET`'s sibling `⎕VSET` — writing several names into one or more
+namespaces at once — isn't needed yet, since nothing here currently
+fans one value out to multiple targets. Noted for when it is.)

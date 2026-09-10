@@ -15,13 +15,13 @@
     ⎕IO←1 ⋄ ⎕ML←1
 
     ∇ h←{opts}Connect cmd
-      :If 0=⎕NC'opts' ⋄ opts←⎕NS'' ⋄ :EndIf
-      h←⎕NS''
-      h.Timeout←10
-      :If 0≠⎕NC'opts.Timeout' ⋄ h.Timeout←opts.Timeout ⋄ :EndIf
-      h.Shell←opts #.Shell.Start cmd
-      h.NextId←1
-      h.Notifications←⍬
+      :If 0=⎕NC'opts' ⋄ opts←() ⋄ :EndIf
+      h←(
+        Shell:opts #.Shell.Start cmd
+        ⋄ Timeout:opts ⎕VGET⊂'Timeout' 10
+        ⋄ NextId:1
+        ⋄ Notifications:⍬
+      )
     ∇
 
     ∇ {r}←Disconnect h
@@ -58,7 +58,7 @@
     ∇ (method params)←_ParseArgs args
       :If 1=≡args
           method←args
-          params←⎕NS''
+          params←()
       :Else
           (method params)←args
       :EndIf

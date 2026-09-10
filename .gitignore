@@ -9,3 +9,7 @@ Thumbs.db
 # Editor/IDE
 .vscode/
 .idea/
+
+# Throwaway exploration scripts (see scratch/) — not part of the
+# committed test suite, personal-machine paths, not meant to be shared.
+scratch/

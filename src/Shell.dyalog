@@ -22,17 +22,17 @@
       ⍝ cmd: a vector of character vectors — the program path followed
       ⍝ by its arguments — as accepted by ⎕SHELL for direct execution.
       ⍝ opts (optional): namespace, may set WorkingDir.
-      :If 0=⎕NC'opts' ⋄ opts←⎕NS'' ⋄ :EndIf
-      h←⎕NS''
-      h.Cmd←cmd
-      h.WorkingDir←(0≠⎕NC'opts.WorkingDir')/opts.WorkingDir
-      h.Lines←⍬
-      h.Status←'Running'
-      h.(ExitCode ExitReason Pid)←¯1 ¯1 ¯1
-      h.Tok←⎕TALLOC 1('mcp-client:',⊃cmd)
-      h.InTok←h.Tok+0.1
-      h.SigTok←h.Tok+0.2
-      h.Tid←_Run&h
+      :If 0=⎕NC'opts' ⋄ opts←() ⋄ :EndIf
+      tok←⎕TALLOC 1('mcp-client:',⊃cmd)
+      h←(
+        Cmd:cmd
+        ⋄ WorkingDir:opts ⎕VGET⊂'WorkingDir' ''
+        ⋄ Lines:⍬
+        ⋄ Status:'Running'
+        ⋄ ExitCode:¯1 ⋄ ExitReason:¯1 ⋄ Pid:¯1
+        ⋄ Tok:tok ⋄ InTok:tok+0.1 ⋄ SigTok:tok+0.2
+      )
+      h.Tid←_Run&h ⍝ needs h to already exist, so can't join the literal above
     ∇
 
     ∇ {r}←h Send text
