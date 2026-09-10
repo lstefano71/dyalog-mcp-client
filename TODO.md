@@ -31,10 +31,11 @@ from.
       `textDocument.hover.contentFormat` for markdown vs. plaintext
       hover content) hasn't been tested; expand `Lsp.Connect`'s
       `capabilities` object if a target server needs it.
-  - **Same gaps `JsonRpc` has, largely un-re-litigated**: single
-    in-flight `Call` only (ADR D7's reasoning applies equally here),
-    no `Stop`/`Disconnect` force-kill fallback (same as the `Shell.Stop`
-    TODO below), batch requests not implemented.
+  - ~~Same gaps `JsonRpc` has~~ — done: `JsonRpcCl` now has the same
+    `Send`/`AwaitResponse`/`CallBatch`/`OnNotification` generalization
+    as `JsonRpc` (Phase 8, ADR D17), landed symmetrically in both.
+    Still open: no `Stop`/`Disconnect` force-kill fallback (same as
+    the `Shell.Stop` TODO below).
   - **The real-LSP verification is now a committed test**
     (`test/11-lsp-cover.apls`), unlike the note below might suggest at
     a glance — but it's the one test in the suite that needs network
@@ -73,18 +74,33 @@ from.
 
 ## JSON-RPC layer
 
-- **Concurrent outstanding requests**: v1 allows exactly one in-flight
-  `Call` per handle (ADR D7). Generalizing to a request-id → response
-  table (so multiple calls can be pipelined) is the natural next step if a
-  server ever needs it — `fff-mcp` doesn't. Would need: a dictionary
-  keyed by id on the handle, and `Receive`'s dispatch loop routing by id
-  instead of assuming "next line = the answer."
-- **Notification dispatch**: v1 only queues unmatched/no-id messages
-  (`h.Notifications`) for the caller to poll. A callback-based dispatch
-  (matching MCP notification methods, e.g. `notifications/tools/list_changed`)
-  is only worth building once phase 3 actually needs to react to one.
-- **Batch requests**: JSON-RPC 2.0 batching is not implemented; MCP
-  2025-06-18 doesn't require it either.
+- ~~Concurrent outstanding requests~~ — done (Phase 8, ADR D17):
+  `Send`/`AwaitResponse` let a handle pipeline several requests before
+  collecting any of their responses, with a `PendingIds`/`PendingMsgs`
+  table (array-oriented lookup, not a loop) holding whichever
+  responses arrive before they're asked for — including genuinely out
+  of send-order. `Call` is now just `AwaitResponse(Send args)`; every
+  pre-existing test kept passing unchanged. Landed identically in both
+  `JsonRpc` and `JsonRpcCl`. See `test/12-jsonrpc-pipelining.apls`/
+  `test/13-jsonrpccl-pipelining.apls`.
+- ~~Notification dispatch~~ — done (Phase 8, ADR D17): `OnNotification
+  (method handlerName)` registers a handler-name string (looked up by
+  method into a trusted table the caller itself populated — never
+  `⍎`'d on server-supplied text) invoked as `h HandlerName parsed`
+  whenever that method's notification arrives. Backward compatible:
+  every notification is still appended to `h.Notifications` regardless
+  of whether a handler fired ("as well as", not "instead of" — see ADR
+  D17 for why). Still open: no way to *unregister* a handler (only
+  replace one by re-registering the same method) — add if a real use
+  case needs it.
+- ~~Batch requests~~ — done (Phase 8, ADR D17): `CallBatch argsVec`
+  sends one JSON-RPC 2.0 batch (one JSON array of request objects,
+  fresh id each) and returns the responses in `argsVec`'s own order
+  regardless of what order the server replied in, reusing the pending
+  mechanism above. `Notify`/`Call` are unaffected — batching only ever
+  applies to `CallBatch` itself, there's no batched-notification verb
+  (JSON-RPC allows mixing notifications into a batch; not exposed here
+  since nothing in this codebase currently needs it — add if it does).
 
 ## Fff cover layer
 
@@ -164,8 +180,14 @@ Still open:
 - **Pagination** (`cursor`/`nextCursor` on `tools/list`): `fff-mcp` returns
   its whole tool list in one page. Implement once a target server actually
   paginates.
-- **`notifications/tools/list_changed`**: no dispatch/re-fetch logic yet;
-  depends on the notification-dispatch item above.
+- ~~`notifications/tools/list_changed`~~ — done (Phase 8, ADR D17):
+  `Mcp.Connect` registers a handler that marks
+  `h.JsonRpc.ToolsStale←1`; `Mcp.ListTools` clears it back to `0` after
+  the next fetch. Deliberately informational only, not a cache
+  invalidation — `Mcp` doesn't cache tool lists at all (`ListTools`
+  always calls `tools/list`), so there's no cache to invalidate; adding
+  one just for this flag was judged overkill until a real caller
+  actually wants cached tool lists. See `test/12-jsonrpc-pipelining.apls`.
 - **Protocol version negotiation edge cases**: v1 sends one fixed
   `protocolVersion` and doesn't handle the server proposing a different,
   unsupported one (spec says the client SHOULD disconnect) — add explicit
@@ -202,3 +224,20 @@ Still open:
   misbehavior modes the real `fff-mcp.exe` never naturally triggers —
   see the Shell layer/JSON-RPC layer sections below for what running it
   surfaced.
+- ~~A peer that can answer out of order / take batch requests~~ — done
+  (Phase 8, ADR D17): `examples/toy-jsonrpc-pipeline-server.py` (NDJSON)
+  and `examples/toy-jsonrpc-cl-pipeline-server.py` (Content-Length) —
+  dedicated servers whose request loop hands each request to its own
+  thread (so a fast request fired after a slow one can genuinely answer
+  first) and whose batch replies are deliberately reversed from request
+  order. See `test/12-jsonrpc-pipelining.apls`/
+  `test/13-jsonrpccl-pipelining.apls`.
+- **Test scripts hardcode an absolute `⎕FIX`/working-directory path**
+  (`D:/devel/mcp-client/...`, or — for `test/10`, a prior phase's own
+  worktree — a now-stale worktree path under `.claude/worktrees/`):
+  every test in this suite assumes it's run from (or against) that
+  exact location, not wherever the repo/worktree actually is. Harmless
+  for a single-machine, single-worktree-at-a-time workflow, but worth
+  making path-relative (e.g. deriving the repo root from the script's
+  own location) if this project ever runs its tests from more than one
+  checkout, or in CI on a different machine.

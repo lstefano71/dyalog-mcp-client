@@ -1,0 +1,57 @@
+#!/usr/local/bin/dyalogscript
+⍝ Phase 8 (ADR D17): the same generalization as test/12, applied
+⍝ identically to JsonRpcCl (Content-Length framing) — pipelined
+⍝ Send/AwaitResponse with out-of-order arrival, CallBatch, and
+⍝ notification dispatch (registered handler vs. backward-compatible
+⍝ fallthrough to h.Notifications). No Mcp-level test here — Mcp is
+⍝ built on JsonRpc, not JsonRpcCl (see README's Layer diagram).
+⎕IO←1
+⎕FIX'file://D:/devel/mcp-client/src/JsonRpcCl.dyalog'
+
+h←JsonRpcCl.Connect'python' 'D:\devel\mcp-client\examples\toy-jsonrpc-cl-pipeline-server.py'
+h.Timeout←10
+
+⍝ --- Pipelined Send/AwaitResponse: out-of-order arrival ---
+t0←⎕AI[3]
+slowId←h JsonRpcCl.Send('delay'(seconds:2 ⋄ text:'slow'))
+fastId←h JsonRpcCl.Send('echo'(text:'fast'))
+fastResp←h JsonRpcCl.AwaitResponse fastId
+fastElapsed←⎕AI[3]-t0
+⎕←'fast response -> ',fastResp.result,' (',(⍕fastElapsed),'ms after send)'
+⎕←'fast arrived well before slow''s 2000ms delay: ',⍕fastElapsed<1500
+
+slowResp←h JsonRpcCl.AwaitResponse slowId
+⎕←'slow response -> ',slowResp.result
+
+⍝ Call is unchanged: Send then immediately AwaitResponse on that id.
+r←h JsonRpcCl.Call('echo'(text:'plain call'))
+⎕←'plain call -> ',r.result
+
+⍝ --- CallBatch: same reversed-reply-order proof as test/12 ---
+batchArgs←('echo'(text:'one'))('echo'(text:'two'))('echo'(text:'three'))
+batchResps←h JsonRpcCl.CallBatch batchArgs
+⎕←'batch results in argsVec order: ',⍕batchResps.result
+
+⍝ --- Notification dispatch: registered handler fires, AND it's still
+⍝ queued in h.Notifications either way (ADR D17: "as well as") ---
+_TestHandlerLog←⍬
+⎕FX'{r}←h _TestNotifyHandler notif' '#._TestHandlerLog,←⊂notif' 'r←⍬'
+h JsonRpcCl.OnNotification('custom/registered' '#._TestNotifyHandler')
+
+r←h JsonRpcCl.Call('notify'(method:'custom/registered' ⋄ notifyParams:(x:1)))
+⎕←'notify(registered) ack -> ',r.result
+⎕←'handler fired exactly once: ',⍕1=≢_TestHandlerLog
+⎕←'handler saw method: ',(⊃_TestHandlerLog).method
+⎕←'also queued in Notifications (as well as, not instead): ',⍕∨/'custom/registered'∘≡¨h.Notifications.method
+
+⍝ A notification with no registered handler still falls through to
+⍝ h.Notifications, exactly like v1 (backward compatibility).
+before←≢h.Notifications
+r←h JsonRpcCl.Call('notify'(method:'custom/unregistered' ⋄ notifyParams:(y:2)))
+⎕←'notify(unregistered) ack -> ',r.result
+⎕←'unregistered notification queued: ',⍕(≢h.Notifications)>before
+⎕←'unregistered notification did NOT invoke the registered handler: ',⍕1=≢_TestHandlerLog
+
+JsonRpcCl.Disconnect h
+⎕←'done'
+⎕OFF

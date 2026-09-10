@@ -8,6 +8,15 @@
 ⍝   JsonRpc              the underlying JsonRpc handle (see JsonRpc.dyalog)
 ⍝   ServerInfo            {name, version} from the initialize response
 ⍝   ServerCapabilities    the capabilities object the server advertised
+⍝
+⍝ ToolsStale (Phase 8, ADR D17): Connect registers _OnToolsListChanged
+⍝ against 'notifications/tools/list_changed' on the underlying JsonRpc
+⍝ handle — since that's the handle the dispatcher actually invokes the
+⍝ handler with, the flag lives at h.JsonRpc.ToolsStale, not h.ToolsStale.
+⍝ Mcp does no tool-list caching (no cache to invalidate), so this is
+⍝ purely informational: it's set 1 when the server announces its tool
+⍝ list changed, and cleared back to 0 the next time ListTools actually
+⍝ fetches a fresh list.
 
     ⎕IO←1 ⋄ ⎕ML←1
 
@@ -22,11 +31,23 @@
           ('Mcp.Connect: server rejected initialize: ',resp.error.message)⎕SIGNAL 999
       :EndIf
       jr #.JsonRpc.Notify'notifications/initialized'
+      jr.ToolsStale←0
+      jr #.JsonRpc.OnNotification('notifications/tools/list_changed' '#.Mcp._OnToolsListChanged')
       h←(
         JsonRpc:jr
         ServerInfo:resp.result.serverInfo
         ServerCapabilities:resp.result.capabilities
       )
+    ∇
+
+    ∇ {r}←h _OnToolsListChanged notif
+      ⍝ Registered (via Connect) against 'notifications/tools/list_changed'.
+      ⍝ h here is the JsonRpc handle the dispatcher calls this with —
+      ⍝ see the ToolsStale note above. Just marks staleness; no cache to
+      ⍝ invalidate (Mcp doesn't cache tool lists — see ADR D17 for why
+      ⍝ adding that here would be overkill for what this needs to do).
+      h.ToolsStale←1
+      r←⍬
     ∇
 
     ∇ {r}←Disconnect h
@@ -42,6 +63,7 @@
           ('Mcp.ListTools: ',resp.error.message)⎕SIGNAL 999
       :EndIf
       tools←resp.result.tools
+      h.JsonRpc.ToolsStale←0 ⍝ a fresh list was just fetched — see the ToolsStale note above
     ∇
 
     ∇ result←h CallTool args

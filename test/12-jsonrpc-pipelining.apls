@@ -1,0 +1,82 @@
+#!/usr/local/bin/dyalogscript
+⍝ Phase 8 (ADR D17): JsonRpc's generalization beyond one in-flight
+⍝ Call — pipelined Send/AwaitResponse with out-of-order arrival,
+⍝ CallBatch, and notification dispatch (registered handler vs.
+⍝ backward-compatible fallthrough to h.Notifications) — plus Mcp's
+⍝ 'notifications/tools/list_changed' reaction. Against
+⍝ examples/toy-jsonrpc-pipeline-server.py, purpose-built for this (see
+⍝ its docstring for why neither existing toy server can be made to
+⍝ answer out of order or in batch on demand).
+⎕IO←1
+⎕FIX'file://D:/devel/mcp-client/src/Shell.dyalog'
+⎕FIX'file://D:/devel/mcp-client/src/JsonRpc.dyalog'
+⎕FIX'file://D:/devel/mcp-client/src/Mcp.dyalog'
+
+cmd←'python' 'D:\devel\mcp-client\examples\toy-jsonrpc-pipeline-server.py'
+h←JsonRpc.Connect cmd
+h.Timeout←10
+
+⍝ --- Pipelined Send/AwaitResponse: a fast request fired SECOND must
+⍝ be collectable BEFORE a slow one fired FIRST resolves ---
+t0←⎕AI[3]
+slowId←h JsonRpc.Send('delay'(seconds:2 ⋄ text:'slow'))
+fastId←h JsonRpc.Send('echo'(text:'fast'))
+fastResp←h JsonRpc.AwaitResponse fastId
+fastElapsed←⎕AI[3]-t0
+⎕←'fast response -> ',fastResp.result,' (',(⍕fastElapsed),'ms after send)'
+⎕←'fast arrived well before slow''s 2000ms delay: ',⍕fastElapsed<1500
+
+slowResp←h JsonRpc.AwaitResponse slowId
+⎕←'slow response -> ',slowResp.result
+
+⍝ Call is unchanged: Send then immediately AwaitResponse on that id.
+r←h JsonRpc.Call('echo'(text:'plain call'))
+⎕←'plain call -> ',r.result
+
+⍝ --- CallBatch: one JSON-RPC batch message; the server replies with
+⍝ its responses deliberately REVERSED from request order, so getting
+⍝ argsVec's own order back proves CallBatch reorders by id, not by
+⍝ arrival order ---
+batchArgs←('echo'(text:'one'))('echo'(text:'two'))('echo'(text:'three'))
+batchResps←h JsonRpc.CallBatch batchArgs
+⎕←'batch results in argsVec order: ',⍕batchResps.result
+
+⍝ --- Notification dispatch: a registered handler fires, AND the
+⍝ notification is still queued in h.Notifications either way (ADR
+⍝ D17: "as well as", not "instead of" — backward compatible) ---
+_TestHandlerLog←⍬
+⎕FX'{r}←h _TestNotifyHandler notif' '#._TestHandlerLog,←⊂notif' 'r←⍬'
+h JsonRpc.OnNotification('custom/registered' '#._TestNotifyHandler')
+
+r←h JsonRpc.Call('notify'(method:'custom/registered' ⋄ notifyParams:(x:1)))
+⎕←'notify(registered) ack -> ',r.result
+⎕←'handler fired exactly once: ',⍕1=≢_TestHandlerLog
+⎕←'handler saw method: ',(⊃_TestHandlerLog).method
+⎕←'also queued in Notifications (as well as, not instead): ',⍕∨/'custom/registered'∘≡¨h.Notifications.method
+
+⍝ A notification with NO registered handler must still fall through
+⍝ to h.Notifications exactly as v1 did (backward compatibility).
+before←≢h.Notifications
+r←h JsonRpc.Call('notify'(method:'custom/unregistered' ⋄ notifyParams:(y:2)))
+⎕←'notify(unregistered) ack -> ',r.result
+⎕←'unregistered notification queued: ',⍕(≢h.Notifications)>before
+⎕←'unregistered notification did NOT invoke the registered handler: ',⍕1=≢_TestHandlerLog
+
+JsonRpc.Disconnect h
+
+⍝ --- Mcp's notifications/tools/list_changed reaction ---
+h2←() Mcp.Connect cmd
+⎕←'mcp connected to ',h2.ServerInfo.name
+⎕←'ToolsStale initially 0: ',⍕0=h2.JsonRpc.ToolsStale
+{}Mcp.ListTools h2
+⎕←'ToolsStale still 0 after an ordinary ListTools: ',⍕0=h2.JsonRpc.ToolsStale
+
+r←h2.JsonRpc JsonRpc.Call('notify'(method:'notifications/tools/list_changed' ⋄ notifyParams:()))
+⎕←'server announced list_changed -> ',r.result
+⎕←'ToolsStale now 1: ',⍕1=h2.JsonRpc.ToolsStale
+{}Mcp.ListTools h2
+⎕←'ToolsStale cleared by the next ListTools fetch: ',⍕0=h2.JsonRpc.ToolsStale
+
+Mcp.Disconnect h2
+⎕←'done'
+⎕OFF

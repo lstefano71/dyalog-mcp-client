@@ -23,10 +23,16 @@
 ⍝   Buffer              raw text received but not yet resolved into a
 ⍝                       complete message (a partial header block or body)
 ⍝   Messages            queue (vector of parsed namespaces) of complete
-⍝                       messages received but not yet consumed
+⍝                       messages received but not yet consumed — a
+⍝                       batch response frame is split into its
+⍝                       individual elements here, same as a single one
 ⍝   Status              'Running' | 'Exited'
 ⍝   ExitCode ExitReason Pid
 ⍝   NextId Timeout Notifications   same meaning as in JsonRpc
+⍝   PendingIds PendingMsgs         same meaning as in JsonRpc (Phase 8,
+⍝                                  ADR D17) — arrived-but-not-yet-
+⍝                                  awaited responses, keyed by id
+⍝   NotifyMethods NotifyHandlers   same meaning as in JsonRpc (ADR D17)
 
     ⎕IO←1 ⋄ ⎕ML←1
 
@@ -49,6 +55,8 @@
         NextId:1
         Timeout:opts ⎕VGET⊂'Timeout' 10
         Notifications:⍬
+        PendingIds:⍬ ⋄ PendingMsgs:⍬
+        NotifyMethods:⍬ ⋄ NotifyHandlers:⍬
       )
       h.Tid←_Run&h ⍝ needs h to already exist, so can't join the literal above
     ∇
@@ -77,12 +85,97 @@
       r←⍬
     ∇
 
-    ∇ resp←h Call args
+    ∇ {r}←h OnNotification args
+      ⍝ See JsonRpc.OnNotification — identical semantics, same ADR D17
+      ⍝ trusted-name-table design.
+      (method handler)←args
+      pos←h.NotifyMethods⍳⊂method
+      :If pos≤≢h.NotifyMethods
+          h.NotifyHandlers[pos]←⊂handler
+      :Else
+          h.NotifyMethods,←⊂method
+          h.NotifyHandlers,←⊂handler
+      :EndIf
+      r←⍬
+    ∇
+
+    ∇ id←h Send args
+      ⍝ See JsonRpc.Send — sends a request with a fresh id, does NOT
+      ⍝ block for the response.
       msg←h _Envelope args
       msg.id←h.NextId
       h.NextId←h.NextId+1
       h _Send msg
-      resp←h _AwaitId msg.id
+      id←msg.id
+    ∇
+
+    ∇ resp←h AwaitResponse id
+      ⍝ See JsonRpc.AwaitResponse — identical semantics, adapted only
+      ⍝ for reading from h.Messages (already a queue of complete
+      ⍝ parsed messages, per this transport's framing) instead of
+      ⍝ JsonRpc's line-at-a-time h.Inbox.
+      :Repeat
+          pos←h.PendingIds⍳id
+          :If pos≤≢h.PendingIds
+              resp←pos⊃h.PendingMsgs
+              keep←pos≠⍳≢h.PendingIds
+              h.PendingIds←keep/h.PendingIds
+              h.PendingMsgs←keep/h.PendingMsgs
+              :Return
+          :EndIf
+          :If 0≠≢h.Messages
+              parsed←⊃h.Messages
+              h.Messages←1↓h.Messages
+              hasId←0≠⎕NC'parsed.id'
+              :If hasId
+              :AndIf parsed.id≡id
+                  resp←parsed
+                  :Return
+              :ElseIf hasId
+                  h.PendingIds,←parsed.id
+                  h.PendingMsgs,←⊂parsed
+              :Else
+                  h _Dispatch parsed
+              :EndIf
+              :Continue
+          :EndIf
+          :If h.Status≡'Exited'
+              ('JsonRpcCl: process exited (reason ',(⍕h.ExitReason),', code ',(⍕h.ExitCode),')')⎕SIGNAL 999
+          :EndIf
+          :If 0=≢h.Timeout ⎕TGET h.SigTok
+              'JsonRpcCl: timed out waiting for a response'⎕SIGNAL 999
+          :EndIf
+      :EndRepeat
+    ∇
+
+    ∇ resp←h Call args
+      resp←h AwaitResponse(h Send args)
+    ∇
+
+    ∇ resps←h CallBatch argsVec
+      ⍝ See JsonRpc.CallBatch — identical semantics.
+      n←≢argsVec
+      ids←h.NextId+(⍳n)-1
+      h.NextId←h.NextId+n
+      msgs←h∘_Envelope¨argsVec
+      msgs←ids _WithId¨msgs
+      h _Send msgs
+      resps←h AwaitResponse¨ids
+    ∇
+
+    ∇ msg←id _WithId msg
+      msg.id←id
+    ∇
+
+    ∇ {r}←h _Dispatch parsed
+      ⍝ See JsonRpc._Dispatch — identical semantics/reasoning (ADR D17).
+      pos←h.NotifyMethods⍳⊂parsed.method
+      :If pos≤≢h.NotifyMethods
+          handler←pos⊃h.NotifyHandlers
+          {}⍎'h ',handler,' parsed'
+      :EndIf
+      h.Notifications,←⊂parsed
+      r←⍬
     ∇
 
     ∇ {r}←h _Send msg
@@ -108,32 +201,6 @@
       :Else
           (method params)←args
       :EndIf
-    ∇
-
-    ∇ resp←h _AwaitId id
-      :Repeat
-          :If 0≠≢h.Messages
-              parsed←⊃h.Messages
-              h.Messages←1↓h.Messages
-              ⍝ ∧ isn't short-circuiting — parsed.id on a notification
-              ⍝ (no id field at all) would VALUE ERROR if this were one
-              ⍝ :If with ∧ instead of :AndIf.
-              :If 0≠⎕NC'parsed.id'
-              :AndIf parsed.id≡id
-                  resp←parsed
-                  :Return
-              :Else
-                  h.Notifications,←⊂parsed
-              :EndIf
-              :Continue
-          :EndIf
-          :If h.Status≡'Exited'
-              ('JsonRpcCl: process exited (reason ',(⍕h.ExitReason),', code ',(⍕h.ExitCode),')')⎕SIGNAL 999
-          :EndIf
-          :If 0=≢h.Timeout ⎕TGET h.SigTok
-              'JsonRpcCl: timed out waiting for a response'⎕SIGNAL 999
-          :EndIf
-      :EndRepeat
     ∇
 
     ∇ {r}←_Run h
@@ -192,7 +259,16 @@
           consumed←(bodyStart-1)+len
           :If consumed>≢h.Buffer ⋄ :Return ⋄ :EndIf ⍝ body not fully arrived yet
           body←len↑(bodyStart-1)↓h.Buffer ⍝ drop is a count, not an index — off by one otherwise
-          h.Messages,←⊂⎕JSON body
+          parsed←⎕JSON body
+          ⍝ A batch response frame's body parses to a rank-1 vector of
+          ⍝ namespaces (a JSON array of objects), not one rank-0
+          ⍝ namespace scalar — split it into h.Messages one at a time,
+          ⍝ same as JsonRpc._NextMessage does for a batch line (ADR D17).
+          :If 0<⍴⍴parsed
+              h.Messages,←parsed
+          :Else
+              h.Messages,←⊂parsed
+          :EndIf
           h.Buffer←consumed↓h.Buffer
       :EndRepeat
       r←⍬
