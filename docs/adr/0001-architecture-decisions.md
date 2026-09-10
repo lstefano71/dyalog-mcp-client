@@ -709,3 +709,209 @@ without a real server to check against:
   as a valid "nothing found here" result) is the server successfully
   telling the caller there's nothing to report, which is ordinary
   data, not a fault. `Lsp.Hover` implements exactly this split.
+
+### D17. `JsonRpc`/`JsonRpcCl`: pipelining, batch requests, notification dispatch
+
+Phase 8 generalizes both JSON-RPC layers beyond D7's v1 "exactly one
+in-flight `Call`" limitation, landed identically in `JsonRpc` and
+`JsonRpcCl` (same verb names/semantics; `JsonRpcCl`'s reads come from
+its own `h.Messages` queue instead of a fresh `Shell.Receive` line, but
+the classification logic is otherwise the same code shape in both).
+This does **not** mean multiple APL threads calling `Call` on the same
+handle concurrently — `Shell.Receive`/`JsonRpcCl`'s buffer still has
+exactly one consumer, and that's staying out of scope (it would mean
+redesigning `Shell` itself, which this phase deliberately does not
+touch). It means one thread can fire off several requests without
+waiting for each one's response immediately, and collect each response
+whenever it's ready, in whatever order they actually arrive.
+
+**Pipelining — `Send`/`AwaitResponse`, and the pending table.**
+`id←h Send args` sends a request with a fresh id and returns
+immediately; `resp←h AwaitResponse id` blocks until that specific id's
+response has arrived. The natural shape for "has this id already
+arrived while I was waiting for a different one?" is a dyadic-`⍳`
+lookup on a plain numeric vector of ids (`h.PendingIds`), paired with a
+same-length vector of the matching parsed messages (`h.PendingMsgs`) —
+not a loop scanning for a match, and not a namespace keyed by id
+(ids are plain integers here, a vector lookup is both the simplest and
+the most idiomatic shape). Removing a found entry is a boolean-mask
+compress (`keep←pos≠⍳≢h.PendingIds ⋄ h.PendingIds←keep/h.PendingIds`),
+again array-oriented rather than a splice-by-loop. `Call` is now
+exactly `h AwaitResponse(h Send args)` — every pre-existing test using
+`Call` kept passing completely unchanged, which is the whole point of
+keeping it as a convenience wrapper rather than reimplementing it
+separately.
+
+**Batch requests — `CallBatch`.** `resps←h CallBatch argsVec` builds
+one request per element of `argsVec` (via `h∘_Envelope¨argsVec`, the
+same operator-bind idiom D15 used for `mode∘_ParseGrep`), assigns each
+a fresh id, sends them as a single JSON-RPC 2.0 batch (one JSON array,
+one wire message), and then just calls `h AwaitResponse¨ids` — reusing
+the exact same pending-table mechanism pipelining already needed, with
+no separate code path for "these responses happen to have arrived
+together in one array." This is also why `argsVec`'s own order comes
+back correctly regardless of the server's reply order: each
+`AwaitResponse` in the `¨` only cares about its own id, not position.
+The toy pipeline servers (below) deliberately reply to a batch in
+**reversed** order specifically to prove this — the naive-but-wrong
+implementation ("just return the array elements in the order they
+arrived") would have silently passed against a server that happened to
+reply in request order, which is exactly the kind of test-passes-for-
+the-wrong-reason trap this project's Manual doc standard (only
+citing examples that were actually run) is meant to catch elsewhere.
+
+A message that is itself a JSON-RPC batch (an array, not one object)
+needed its own detection: `⎕JSON` parses a JSON object to a rank-0
+namespace scalar and a JSON array of objects to a rank-1 vector of
+namespace refs, so `0<⍴⍴raw` is the array/single-message test — no
+special-casing needed beyond that, since a rank-1 result just gets
+flattened directly into the same per-message queue a single message
+would have landed in one at a time (`JsonRpc.h.Inbox`,
+`JsonRpcCl._ExtractMessages` appending straight into `h.Messages`).
+`JsonRpc` needed a new `h.Inbox` queue for this (a single incoming
+line can now expand into several messages to classify one at a time);
+`JsonRpcCl` didn't need an equivalent, since `h.Messages` already
+played exactly that role for its per-frame message queue.
+
+**Notification dispatch — the function-values problem, and why a
+name-string table won.** The task here is: register a handler for a
+method name, discovered only at runtime (the server can send any
+`method`), and invoke the right one when a matching notification
+arrives — a small dynamic dispatch table. Dyalog has no first-class
+traditional-function value (D12 already hit this for `Fff._WithParsed`
+and reached for an operator instead), so a plain `h OnNotification
+(method SomeHandlerFn)` registration, expecting to store `SomeHandlerFn`
+as ordinary data, simply doesn't work — there is nothing to store.
+Two real directions were considered:
+
+- **(a) A name-string table**, mirroring the convention `⎕SHELL`'s own
+  `Output ('Callback' fn)` already uses throughout this codebase
+  (`('_OnOutput' h)`): `OnNotification` takes `(method handlerName)`,
+  where `handlerName` is a fully-qualified function-name character
+  vector (e.g. `'#.Mcp._OnToolsListChanged'`) chosen by the
+  *registering* code. Dispatch looks up `parsed.method` (server text)
+  via a dyadic-`⍳` into `h.NotifyMethods` (our own trusted table) to
+  find the matching `h.NotifyHandlers` entry, then invokes it by
+  building a tiny string, `'h ',handler,' parsed'`, and `⍎`ing it.
+- **(b) An operator-based registration API** instead of a runtime
+  string-keyed table — the same shape as `Fff._WithParsed`'s
+  `(_ParseFindFiles _WithParsed)raw`.
+
+(b) was rejected for the reason the task itself flags: an operator's
+operand is bound at the call site, in the *caller's own code*, not
+discoverable from a runtime value. `Fff._WithParsed` works precisely
+*because* the caller already knows, statically, which parser it wants
+(`_ParseFindFiles` vs `_ParseGrep`) — there's exactly one call site per
+tool, chosen by the programmer writing `Fff.Find` vs `Fff.Grep`. This
+problem is different in kind: the whole point of `OnNotification` is
+that a method name arriving over the wire, *at runtime*, must select
+the right previously-registered handler out of a set that can grow
+after the fact (multiple `OnNotification` calls, one per method,
+possibly from different covers built on the same JsonRpc handle — e.g.
+future covers besides `Mcp` might want to register their own methods
+on a shared connection). An operator can't be handed a runtime string
+and asked to "become" the right derived function; it can only be
+written once at the call site where its operand is a literal or a
+variable already in scope. So (b) doesn't actually solve the stated
+problem — it would only work if there were a small, fixed, statically-
+known set of methods to dispatch on, chosen by the code that also owns
+the `AwaitResponse`/dispatch loop itself, which isn't the case here
+(`JsonRpc`/`JsonRpcCl` know nothing about MCP-specific method names;
+`Mcp` is just one caller registering into a shared, general mechanism).
+
+(a) does solve it, and is safe *specifically because* of what goes into
+each side of the lookup: `parsed.method` (server-supplied, untrusted)
+is used **only as a lookup key** — a dyadic-`⍳` position into
+`h.NotifyMethods` — never as text that gets executed. What ends up
+inside the `⍎`'d string (`handler`) is a value from `h.NotifyHandlers`,
+and every entry in that table was put there by a prior `OnNotification`
+call made by *this codebase's own code* (`Mcp.Connect`, or any future
+caller) — never by anything the server sent. This is exactly the
+house rule already stated for numeric parsing (D13's `⎕VFI`-not-`⍎`
+note) generalized to dispatch-by-name: the untrusted input selects a
+position in a table we built, it never becomes code itself. Re-reading
+D12's operator-vs-plain-value writeup while finalizing this confirmed
+the boundary: D12's operator case is "the caller knows statically
+which function it wants"; this case is "an untrusted runtime value
+must select among several `OnNotification`-registered functions",
+which is a genuinely different problem an operator can't address.
+
+**Backward compatibility — "as well as", not "instead of".** When a
+handler *is* registered for an arriving notification's method, it's
+invoked, and the notification is **still** appended to
+`h.Notifications` — not replaced by the handler firing. Two reasons:
+(1) it's what "backward compatible" has to mean for existing code that
+already polls `h.Notifications` — adding a *new* `OnNotification`
+registration for some method (e.g. from a library update) must not
+silently stop that method's notifications from showing up in a queue
+existing code already reads; (2) `h.Notifications` stays a complete,
+inspectable log of everything that arrived, useful for debugging a
+session regardless of what got dispatched. The cost is that a consumer
+using both mechanisms for the same method sees it twice (once via the
+handler, once in the queue) — judged the lesser surprise compared to
+"registering a handler quietly changes what already-working polling
+code sees."
+
+**`Mcp`'s reaction to `notifications/tools/list_changed`.** `Mcp` has
+no tool-list caching at all today — `ListTools` always calls
+`tools/list` fresh. Building a cache *just* to have something for this
+notification to invalidate would be scope creep the task didn't ask
+for and no test exercises otherwise, so `Mcp.Connect` registers a
+handler that only sets `h.ToolsStale←1` (informational), and
+`Mcp.ListTools` clears it back to `0` immediately after it fetches a
+fresh list — giving the flag real, checkable meaning (it's genuinely
+`1` exactly while the server has said "stale" and the caller hasn't
+re-fetched since) without pretending there's a cache underneath it.
+One non-obvious wrinkle: the handler is invoked by `JsonRpc`'s dispatch
+as `h HandlerName parsed`, where `h` is the *`JsonRpc` handle*
+(`jr`), not the `Mcp` handle — `JsonRpc` has no way to know about the
+`Mcp` handle wrapping it. So the flag necessarily lives at
+`h.JsonRpc.ToolsStale` from `Mcp`'s own callers' point of view, not
+`h.ToolsStale` — documented at the top of `Mcp.dyalog` rather than
+silently surprising a reader who expects it on the outer handle.
+
+**Testing — a new, dedicated toy server pair, not an extension of the
+existing ones.** Provoking genuine out-of-order responses needs the
+server's *request loop itself* to hand every request to its own
+thread — a structural change, not an additional method — because
+`examples/toy-jsonrpc-server.py`'s stdin loop processes one line fully
+(including any `sleep`) before it even reads the next, so a slow
+request already blocks the next line from being read, let alone
+answered first. `examples/toy-jsonrpc-pipeline-server.py` (NDJSON) and
+its Content-Length-framed twin `examples/toy-jsonrpc-cl-pipeline-
+server.py` are purpose-built for this: `echo`/`delay(seconds,text)`
+answered from per-request threads, a `notify(method,notifyParams)`
+method to provoke an arbitrary unsolicited notification on demand
+(used to drive `Mcp`'s `list_changed` reaction without needing a real
+MCP server that actually sends one), and batch requests answered with
+their responses deliberately **reversed** from request order (see
+"Batch requests" above for why that specific choice matters, not just
+"any order"). Both also implement bare-minimum `initialize`/
+`tools/list` methods so `test/12` can drive a full `Mcp.Connect`/
+`ListTools` round trip without a real MCP server.
+`test/12-jsonrpc-pipelining.apls`/`test/13-jsonrpccl-pipelining.apls`
+exercise pipelined out-of-order `AwaitResponse`, `CallBatch`,
+registered-vs-unregistered notification dispatch, and (test/12 only,
+since `Mcp` is built on `JsonRpc`, not `JsonRpcCl`) the `ToolsStale`
+reaction — against both layers where applicable. The full existing
+suite (`test/01` through `test/11`) was re-run afterward and passed
+with zero regressions.
+
+Non-obvious mistake made and fixed while building this, worth
+recording since it's an easy trap: a tradfn header of the shape
+`∇ parsed←h _NextMessage` does **not** define a dyadic function with
+`h` as its left argument — APL has no "monadic function with its
+argument on the left" form, so Dyalog instead parses the *first*
+identifier as the function name and the second as its (monadic,
+right-hand) argument: this line actually defined a function called
+`h` taking an argument named `_NextMessage`, silently shadowing the
+handle variable `h` used everywhere else. A monadic helper that takes
+only the handle must follow the existing convention already visible in
+`Mcp.ListTools`/`Disconnect` (`h` on the **right**, since there's no
+second argument to justify the left-argument-is-the-handle convention
+at all) — fixed to `∇ parsed←_NextMessage h`. `⎕NL 3 4` on the fixed
+namespace is what actually surfaced this (an unexpected niladic-
+looking `h` function appeared in the listing, and the intended
+`_NextMessage` was simply absent) — worth remembering as a diagnostic
+technique if a newly-added function seems to silently not exist after
+`⎕FIX`.

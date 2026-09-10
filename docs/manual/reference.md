@@ -91,13 +91,18 @@ Shell.Stop h ⍝ must be safe to call twice
 ## `JsonRpc` — minimal JSON-RPC 2.0 over `Shell`
 
 Adds request/response correlation and message shape on top of `Shell`.
-v1 allows exactly one in-flight `Call` per handle (ADR D7). Source:
-`src/JsonRpc.dyalog`.
+Beyond one-at-a-time `Call`, a handle can pipeline several requests
+(`Send`/`AwaitResponse`), send a JSON-RPC batch (`CallBatch`), and
+dispatch notifications to registered handlers (`OnNotification`) — see
+ADR D17 (Phase 8; ADR D7 was v1's original one-in-flight-request
+limitation). Source: `src/JsonRpc.dyalog`.
 
 **Handle fields** (in addition to the `Shell` handle it wraps, at
 `h.Shell`): `NextId`, `Timeout` (seconds; default `10`),
-`Notifications` (queue of parsed messages that arrived but weren't the
-awaited response — see ADR D7).
+`Notifications` (queue of parsed no-id messages — always populated,
+whether or not a handler also fired, see ADR D17), `PendingIds`/
+`PendingMsgs` (responses that arrived before `AwaitResponse` asked for
+them), `NotifyMethods`/`NotifyHandlers` (the `OnNotification` table).
 
 ### `h←{opts}Connect cmd`
 
@@ -155,6 +160,71 @@ h JsonRpc.Notify'notifications/initialized'
 ```
 (`test/04-jsonrpc-roundtrip.apls`)
 
+### `id←h Send args`
+
+Same `args` shape as `Call`. Sends a request with a fresh id and
+returns that id **immediately** — does not block for the response.
+Pair with `AwaitResponse` to pipeline several requests before
+collecting any of their answers (ADR D17).
+
+```apl
+slowId←h JsonRpc.Send('delay'(seconds:2 ⋄ text:'slow'))
+fastId←h JsonRpc.Send('echo'(text:'fast'))
+fastResp←h JsonRpc.AwaitResponse fastId ⍝ returns well before slowId's response
+```
+(`test/12-jsonrpc-pipelining.apls`)
+
+### `resp←h AwaitResponse id`
+
+Blocks until the response with this specific `id` has arrived —
+instantly, if it already showed up while waiting on a *different* id
+(any such message is stashed, keyed by id); otherwise reads incoming
+messages until it sees this one. Any other id-bearing message seen
+along the way is stashed for a later `AwaitResponse` on that id; any
+no-id message goes through notification dispatch (`OnNotification`).
+
+```apl
+slowResp←h JsonRpc.AwaitResponse slowId
+⎕←'slow response -> ',slowResp.result
+```
+(`test/12-jsonrpc-pipelining.apls`)
+
+`resp←h Call args` is exactly `h AwaitResponse(h Send args)` — the
+existing send-then-immediately-wait convenience wrapper, unchanged.
+
+### `resps←h CallBatch argsVec`
+
+`argsVec`: a vector of `args`, each in the same shape `Send`/`Call`
+accept. Sends one JSON-RPC 2.0 batch request (a single JSON array of
+request objects, one fresh id each) and returns the responses in
+`argsVec`'s **own order** — regardless of what order the server
+actually replied in.
+
+```apl
+batchArgs←('echo'(text:'one'))('echo'(text:'two'))('echo'(text:'three'))
+batchResps←h JsonRpc.CallBatch batchArgs
+⎕←⍕batchResps.result ⍝ one two three, in this order, whatever order the server replied in
+```
+(`test/12-jsonrpc-pipelining.apls`)
+
+### `{r}←h OnNotification args`
+
+`args` is `(method handlerName)` — `handlerName` is a fully-qualified
+function-name character vector (e.g. `'#.Mcp._OnToolsListChanged'`),
+invoked as `h HandlerName parsed` whenever a notification with this
+`method` arrives (`h` here is this same `JsonRpc` handle; `parsed` is
+the notification's parsed namespace). Registering the same method
+again replaces the old handler. See ADR D17 for why this is a
+name-string table, not an operator-based API, and why the notification
+is *also* always appended to `h.Notifications` regardless of whether a
+handler fired.
+
+```apl
+⎕FX'{r}←h _MyHandler notif' '#._Log,←⊂notif' 'r←⍬'
+h JsonRpc.OnNotification('custom/event' '#._MyHandler')
+```
+(adapted from `test/12-jsonrpc-pipelining.apls`)
+
 ---
 
 ## `Mcp` — MCP protocol semantics over `JsonRpc`
@@ -166,6 +236,8 @@ D8) — resources, prompts, sampling, roots, pagination, and
 
 **Handle fields** (in addition to the `JsonRpc` handle it wraps, at
 `h.JsonRpc`): `ServerInfo` (`{name, version}`), `ServerCapabilities`.
+`Connect` also registers a `notifications/tools/list_changed` handler
+on `h.JsonRpc` (ADR D17) — see `ListTools` below for `ToolsStale`.
 
 ### `h←{opts}Connect cmd`
 
@@ -201,6 +273,22 @@ tools←Mcp.ListTools h
 ⎕←'tools: ',⍕tools.name
 ```
 (`test/05-mcp-roundtrip.apls`)
+
+`ListTools` also clears `h.JsonRpc.ToolsStale` back to `0` (ADR D17).
+That flag is set to `1` by a handler `Connect` registers for
+`notifications/tools/list_changed` — purely informational, since `Mcp`
+does no tool-list caching to invalidate; it lives on `h.JsonRpc`
+(rather than `h`) because that's the handle the notification's
+dispatcher actually invokes the handler with.
+
+```apl
+⎕←'stale before: ',⍕h.JsonRpc.ToolsStale ⍝ 0
+⍝ ... server later sends notifications/tools/list_changed ...
+⎕←'stale after server's notice: ',⍕h.JsonRpc.ToolsStale ⍝ 1
+{}Mcp.ListTools h
+⎕←'stale after a fresh fetch: ',⍕h.JsonRpc.ToolsStale ⍝ 0
+```
+(`test/12-jsonrpc-pipelining.apls`)
 
 ### `result←h CallTool args`
 
@@ -394,16 +482,19 @@ A second, self-contained JSON-RPC layer, independent of `Shell` —
 speaks the Content-Length-header framing LSP/DAP and most other stdio
 JSON-RPC servers use (as opposed to `JsonRpc`'s newline-delimited
 framing, which MCP uses). Same verb shape as `JsonRpc`
-(`Connect`/`Disconnect`/`Call`/`Notify`), same v1 scope (one in-flight
-`Call` per handle — ADR D7's reasoning applies here too), same
+(`Connect`/`Disconnect`/`Call`/`Notify`/`Send`/`AwaitResponse`/
+`CallBatch`/`OnNotification`), same generalization beyond one-in-flight
+`Call` (ADR D17, landed identically in both layers), same
 error-handling split (ADR D6: a JSON-RPC error response is ordinary
 data; transport/protocol faults signal). Source: `src/JsonRpcCl.dyalog`.
 
 **Handle fields**: `Cmd`, `WorkingDir`, `Buffer` (partially-received
 data, not yet a complete message), `Messages` (queue of complete
-messages received but not yet consumed), `Status`, `ExitCode`,
-`ExitReason`, `Pid`, `NextId`, `Timeout` (default `10`),
-`Notifications`.
+messages received but not yet consumed — a batch frame is split into
+its individual elements here, same as a single one), `Status`,
+`ExitCode`, `ExitReason`, `Pid`, `NextId`, `Timeout` (default `10`),
+`Notifications`, `PendingIds`/`PendingMsgs`, `NotifyMethods`/
+`NotifyHandlers` (same meaning as in `JsonRpc` — see ADR D17).
 
 ### `h←{opts}Connect cmd`
 
@@ -453,6 +544,22 @@ h.Timeout←2
 
 Same `args` shape as `Call`; sends a notification (no id), doesn't
 wait for a response. See `JsonRpc.Notify` — identical semantics.
+
+### `id←h Send args` / `resp←h AwaitResponse id` / `resps←h CallBatch argsVec` / `{r}←h OnNotification args`
+
+Identical semantics to their `JsonRpc` counterparts (see above) — ADR
+D17's generalization landed the same way in both layers.
+
+```apl
+slowId←h JsonRpcCl.Send('delay'(seconds:2 ⋄ text:'slow'))
+fastId←h JsonRpcCl.Send('echo'(text:'fast'))
+fastResp←h JsonRpcCl.AwaitResponse fastId ⍝ returns well before slowId's response
+
+batchResps←h JsonRpcCl.CallBatch(('echo'(text:'one'))('echo'(text:'two')))
+
+h JsonRpcCl.OnNotification('custom/event' '#._MyHandler')
+```
+(`test/13-jsonrpccl-pipelining.apls`)
 
 ---
 

@@ -1,19 +1,64 @@
 # Plan — Dyalog APL MCP Client
 
-**Status**: All four phases (`Shell`, `JsonRpc`, `Mcp`, `Fff`) done and
-verified against real `fff-mcp.exe` (including a real ~94k-file, non-git
-tree — see `examples/fff-search-large-tree.apls`) — see `src/*.dyalog` and
-`test/01-*.apls`..`08-*.apls`. v1 scope (ADR D8) is complete; see
-`TODO.md` for what's next. A fifth piece, `JsonRpcCl`, adds a second
-transport (Content-Length framing) alongside the original four phases'
-newline-delimited one. A tenth piece, `Lsp`, is a minimal cover on top
-of `JsonRpcCl`, verified against real `pyright-langserver`. Phase 9
-closed out the four previously-open `Fff` parser gaps (auto-broadened
-queries, the path-only fallback, `output_mode` variants, and
-pagination-scale grouping). A sixth piece, `examples/toy-jsonrpc-
-fixture-server.py` plus `test/09-*.apls`, adds an on-demand mocked
-stdio peer for otherwise hard-to-provoke server misbehaviors — see
-Phases 10, 9, and 6 below, in that order.
+**Status**: All four original phases (`Shell`, `JsonRpc`, `Mcp`, `Fff`)
+done and verified against real `fff-mcp.exe` (including a real
+~94k-file, non-git tree — see `examples/fff-search-large-tree.apls`) —
+see `src/*.dyalog` and `test/01-*.apls`..`08-*.apls`. v1 scope (ADR D8)
+is complete; see `TODO.md` for what's next. A fifth piece, `JsonRpcCl`,
+adds a second transport (Content-Length framing) alongside the
+original four phases' newline-delimited one. A tenth piece, `Lsp`, is a
+minimal cover on top of `JsonRpcCl`, verified against real
+`pyright-langserver`. Phase 9 closed out the four previously-open `Fff`
+parser gaps (auto-broadened queries, the path-only fallback,
+`output_mode` variants, and pagination-scale grouping). A sixth piece,
+`examples/toy-jsonrpc-fixture-server.py` plus `test/09-*.apls`, adds an
+on-demand mocked stdio peer for otherwise hard-to-provoke server
+misbehaviors. Phase 8 generalizes `JsonRpc`/`JsonRpcCl` beyond ADR D7's
+v1 one-in-flight-request limit — pipelined `Send`/`AwaitResponse`,
+JSON-RPC batch requests (`CallBatch`), and notification dispatch
+(`OnNotification`) — and gives `Mcp` a reaction to
+`notifications/tools/list_changed`. See Phases 8, 10, 9, and 6 below,
+in that order.
+
+## Phase 8 — `JsonRpc`/`JsonRpcCl`: pipelining, batch requests, notification dispatch
+
+Generalizes both JSON-RPC layers identically beyond ADR D7's v1 "one
+in-flight `Call` at a time" limitation, per ADR D17:
+
+- `id←h Send args` sends a request and returns its id immediately,
+  without blocking for the response; `resp←h AwaitResponse id` blocks
+  for that specific id, stashing (in an array-oriented, `⍳`-searched
+  `PendingIds`/`PendingMsgs` table — not a loop) any other id-bearing
+  message that arrives first, so a later `AwaitResponse` for THAT id
+  returns instantly. `Call` is now just `AwaitResponse(Send args)` —
+  every pre-existing test kept passing unchanged.
+- `resps←h CallBatch argsVec` sends one JSON-RPC 2.0 batch (a JSON
+  array of request objects, fresh id each) and returns the responses in
+  `argsVec`'s own order, regardless of what order the server replied
+  in — reusing the same pending-table mechanism.
+- `h OnNotification (method handlerName)` registers a handler-name
+  string, looked up by method into a trusted table the *caller itself*
+  populated (an array-oriented `⍳` lookup — server-supplied text is
+  used only as the lookup key, never `⍎`'d directly) and invoked as
+  `h HandlerName parsed` when that notification arrives. Backward
+  compatible: every notification still lands in `h.Notifications`
+  regardless of whether a handler fired ("as well as", not "instead
+  of" — see ADR D17 for the reasoning).
+- `Mcp.Connect` registers a handler for
+  `notifications/tools/list_changed` that marks
+  `h.JsonRpc.ToolsStale←1`; `Mcp.ListTools` clears it after its next
+  fetch. Deliberately informational only — `Mcp` doesn't cache tool
+  lists at all, so there's no cache to invalidate.
+
+Verified with two new dedicated toy servers,
+`examples/toy-jsonrpc-pipeline-server.py` (NDJSON) and
+`examples/toy-jsonrpc-cl-pipeline-server.py` (Content-Length) — each
+request runs on its own thread, so a fast request fired after a slow
+one genuinely answers first, and batch replies come back deliberately
+reversed from request order (proving a client reorders by id, not
+arrival order) — see `test/12-jsonrpc-pipelining.apls`/
+`test/13-jsonrpccl-pipelining.apls`. Full existing suite (`test/01`
+through `test/11`) re-run afterward with zero regressions. See ADR D17.
 
 ## Phase 10 — `Lsp`: a minimal LSP cover over `JsonRpcCl`
 
