@@ -225,6 +225,78 @@ working *data*, at the cost of only working for this one server.
 Fff.Disconnect h
 ```
 
+## Step 5 — `JsonRpcCl`: the other transport, against a real language server
+
+Every server so far — the toy script, `server-memory`, `fff-mcp` —
+speaks the same wire format: one JSON object per line. That's MCP's
+framing, and it's what `Shell`/`JsonRpc`/`Mcp`/`Fff` are all built on
+(ADR D5). It is, however, the *unusual* choice outside MCP —
+Content-Length-header framing (a `"Content-Length: N\r\n\r\n"` prefix,
+then exactly `N` bytes of JSON) is what LSP, DAP, and most other stdio
+JSON-RPC servers actually use. `JsonRpcCl` speaks that framing instead,
+and is otherwise independent of everything above — it doesn't build on
+`Shell` at all (see ADR D13 for why: a byte-counted body needs raw
+bytes, not `Shell`'s line-split text).
+
+To see it against something with real substance, not just a toy
+script, this step drives `pyright`'s language server directly — no
+project to open, just enough of LSP's `initialize` handshake to prove
+the transport:
+
+```apl
+⎕FIX'file://D:/devel/mcp-client/src/JsonRpcCl.dyalog'
+
+opts←(Timeout:60)
+h←opts JsonRpcCl.Connect'cmd.exe' '/C' 'npx' '-y' '-p' 'pyright' 'pyright-langserver' '--stdio'
+```
+
+(`cmd.exe /C` again, for the same reason as `server-memory` in Step 3
+— `npx` is a `.cmd` shim on Windows. The `-p pyright` matters too:
+`pyright-langserver` is a bin *inside* the `pyright` npm package, not
+a package of its own — a bare `npx -y pyright-langserver` 404s.)
+
+```apl
+params←(processId:⊂'null' ⋄ rootUri:⊂'null' ⋄ capabilities:())
+r←h JsonRpcCl.Call('initialize' params)
+⎕←'server capabilities: ',⍕r.result.capabilities.⎕NL ¯2
+```
+```
+server capabilities:  callHierarchyProvider  textDocumentSync 
+```
+
+(`⊂'null'` is how a JSON `null` is written on the way *out*, same as
+`⎕JSON` gives you `⊂'true'`/`⊂'false'` coming *in* — see ADR D11.)
+
+A real language server, unlike our three MCP-family test servers,
+talks back before you ask it anything — startup log messages arrive as
+unsolicited notifications, interleaved with the response to
+`initialize`. `JsonRpcCl` handles that exactly like `JsonRpc` does:
+anything that isn't the awaited response lands in `h.Notifications`
+rather than derailing the call.
+
+```apl
+h JsonRpcCl.Notify'initialized'
+⎕←'queued notifications so far: ',⍕≢h.Notifications
+:For n :In h.Notifications
+    ⎕←' ',n.method
+:EndFor
+```
+```
+queued notifications so far: 2
+ window/logMessage
+ window/logMessage
+```
+
+```apl
+JsonRpcCl.Disconnect h
+```
+
+That's the point of Step 5: nothing about `JsonRpcCl`'s API differs
+from `JsonRpc`'s (`Connect`/`Call`/`Notify`/`Disconnect`, the same
+`Notifications` queue, the same error/signal split), only the framing
+underneath — and a real, unrelated piece of tooling (a Python language
+server, nothing to do with MCP or fff) just worked against it.
+
 ## Where to go next
 
 - [Reference](reference.md) — every verb, looked up by layer.
@@ -232,7 +304,9 @@ Fff.Disconnect h
   choices was made, including several things this Tutorial glossed
   over (the token-based synchronization inside `Shell`, why `Fff`'s
   parser is deliberately best-effort, the stderr-callback gotcha
-  mentioned above).
-- `TODO.md` — what's explicitly not built yet, including a
-  Content-Length-framed transport that would let this client talk to
-  language servers and similar tools, not just MCP-family ones.
+  mentioned above, and the `⎕SHELL` variant quirks `JsonRpcCl` hit
+  along the way).
+- `TODO.md` — what's explicitly not built yet, including a proper
+  cover on top of `JsonRpcCl` (Step 5 only proves the transport, the
+  way Step 1 does for `Shell` — nothing there turns LSP responses into
+  structured data the way `Fff` does for `fff-mcp`).
