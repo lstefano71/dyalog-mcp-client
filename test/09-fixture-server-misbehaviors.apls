@@ -1,0 +1,67 @@
+#!/usr/local/bin/dyalogscript
+⍝ Phase 6 (ADR D14): exercises examples/toy-jsonrpc-fixture-server.py's
+⍝ four on-demand misbehavior modes against Shell/JsonRpc, proving each
+⍝ one is a controllable, repeatable trigger rather than something only
+⍝ reasoned about. Does NOT attempt to fix anything found here — any
+⍝ surprising behavior is just reported, and tracked as a TODO.md item
+⍝ if it looks like a real gap (see TODO.md's Shell/JSON-RPC layer
+⍝ sections for what this run surfaced).
+⎕IO←1
+⎕FIX'file://D:/devel/mcp-client/src/Shell.dyalog'
+⎕FIX'file://D:/devel/mcp-client/src/JsonRpc.dyalog'
+
+cmd←'python' 'D:\devel\mcp-client\examples\toy-jsonrpc-fixture-server.py'
+
+⍝ --- Sanity: ordinary echo still works against the fixture server ---
+h←JsonRpc.Connect cmd
+r←h JsonRpc.Call('echo'(text:'sanity'))
+⎕←'sanity echo -> ',r.result
+JsonRpc.Disconnect h
+
+⍝ --- Mode 1: crash — server exits uncleanly instead of responding ---
+h←JsonRpc.Connect cmd
+:Trap 999
+    r←h JsonRpc.Call('crash'(code:3))
+    ⎕←'FAIL: expected a signal, got a response instead'
+:Else
+    ⎕←'crash -> signaled ok: ',⎕DM
+    ⎕←'  Shell.Status after crash=',h.Shell.Status
+    ⎕←'  Shell.ExitCode after crash=',⍕h.Shell.ExitCode
+:EndTrap
+Shell.Stop h.Shell ⍝ already exited; must still be safe to call
+
+⍝ --- Mode 2: garbage — malformed JSON instead of a real response ---
+h←JsonRpc.Connect cmd
+:Trap 999
+    r←h JsonRpc.Call'garbage'
+    ⎕←'FAIL: expected a signal, got a response instead'
+:Else
+    ⎕←'garbage -> signaled ok: ',⎕DM
+:EndTrap
+⍝ The process itself is still alive (only the response line was bad) —
+⍝ confirm the connection can still be used/torn down cleanly.
+⎕←'  Shell.Status after garbage=',h.Shell.Status
+JsonRpc.Disconnect h
+
+⍝ --- Mode 3: hang — server never responds; must time out ---
+h←JsonRpc.Connect cmd
+h.Timeout←2
+:Trap 999
+    r←h JsonRpc.Call'hang'
+    ⎕←'FAIL: expected a timeout signal'
+:Else
+    ⎕←'hang -> timeout signaled ok: ',⎕DM
+:EndTrap
+Shell.Stop h.Shell
+
+⍝ --- Mode 4: burst — N unsolicited notifications ahead of the real response ---
+h←JsonRpc.Connect cmd
+r←h JsonRpc.Call('burst'(count:8 ⋄ text:'stress'))
+⎕←'burst response -> ',r.result,' (id=',(⍕r.id),')'
+⎕←'  notifications queued: ',⍕≢h.Notifications
+⎕←'  all burst/notice: ',⍕∧/'burst/notice'∘≡¨h.Notifications.method
+⎕←'  n values in order: ',⍕∊h.Notifications.params.n
+JsonRpc.Disconnect h
+
+⎕←'done'
+⎕OFF

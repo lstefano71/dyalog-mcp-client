@@ -408,3 +408,84 @@ general APL gotchas, not specific to this transport:
   actual tool for "turn this digit string into a number" and never
   executes anything. (This applies equally to the digit-parsing added
   for `Fff` in D12, fixed alongside this.)
+
+### D14. A mocked/canned-fixture stdio peer for hard-to-provoke misbehaviors
+
+`fff-mcp` is a plain, spec-compliant, well-behaved server (see this
+ADR's own "Context" section) — which is exactly why it's useless for
+testing what happens when a server *doesn't* behave. It never crashes
+mid-response, never sends malformed JSON, never hangs, never floods
+unsolicited notifications ahead of a real response. Those paths
+(TODO.md's Shell/JSON-RPC layer sections) could only be reasoned about
+from reading `Shell`/`JsonRpc`'s source, never actually triggered and
+watched. A real server occasionally misbehaving in the wild isn't a
+substitute for this either — it's not reproducible, and you can't write
+a regression test against "wait for it to happen again."
+
+`examples/toy-jsonrpc-fixture-server.py` solves this the same way the
+existing toy servers (D5's NDJSON one, D13's Content-Length one) solve
+"is there a well-known non-MCP stdio JSON-RPC server to test against":
+by being purpose-built, small, and committed. Its methods let a test
+*ask* for a specific misbehavior by name rather than hope one shows up:
+
+- `crash(code)` — exits the process immediately, un-cleanly, instead of
+  ever writing a response.
+- `garbage()` — writes one line of deliberately invalid JSON instead of
+  a real response, then keeps serving later requests normally (proves
+  the malformed line itself is the fault, not a wedged process).
+- `hang()` — blocks forever and never responds. Deliberately a
+  *separate* method from reusing the existing toy servers' `sleep
+  (seconds)` idea: `sleep` is built to demonstrate a client timeout
+  shorter than a finite sleep, which is still a race between two
+  durations, however lopsided. `hang` has no duration at all to race
+  against — it removes the "is the client timeout just too generous"
+  question entirely.
+- `burst(count, text)` — emits `count` unsolicited notifications (no
+  `id`) before its real response, to stress-test `h.Notifications`
+  queuing under load (5-10+ notifications, not just one or two) without
+  disrupting the response that eventually follows.
+
+`test/09-fixture-server-misbehaviors.apls` exercises all four against
+`Shell`/`JsonRpc` and records today's *actual* observed behavior — it
+deliberately does not fix anything it finds (that's the next phase's
+job; TODO.md tracks what to fix). All four behaved as the existing code
+already intends: `crash` and `hang` both signal (a process-exit signal
+carrying the fixture's real exit code, vs. a plain timeout signal —
+confirming these two really are distinguishable, not the same signal
+wearing two different messages); `garbage` signals `JsonRpc`'s existing
+"malformed JSON from server" path; a `burst` of 8 notifications all
+land in `h.Notifications`, in order, without disturbing the real
+response. Concretely: this is what confirmed the exact
+`Shell.Receive: process exited (reason <r>, code <c>)` message shape
+against a real mid-`Receive` crash, resolving that ADR D-adjacent
+TODO.md open question, and what caught the `Stop` force-kill gap
+actually leaving an orphaned `python.exe` process running forever after
+`hang` (closing stdin does nothing to a process blocked in a wait with
+no timeout of its own) — both already-known TODO.md items, now backed
+by a reproducible trigger instead of just reasoning.
+
+Non-obvious things hit while building it:
+
+- **A crashing method must exit the *interpreter* process, not just
+  raise inside the handler** — `sys.exit(code)` inside a Python
+  `except`-guarded dispatch loop needs `except SystemExit: raise`
+  ahead of the general `except Exception` clause, or the crash gets
+  silently swallowed and reported back as an ordinary JSON-RPC error
+  instead of actually killing the process — defeating the entire point
+  of a `crash` method.
+- **`threading.Event().wait()` with no timeout argument blocks
+  genuinely forever**, unlike `time.sleep(large-number)` — both look
+  similar on paper, but `sleep` is still racing a clock the caller
+  could out-wait with a long enough timeout; a bare `.wait()` has no
+  clock in it at all. This is what actually makes `hang` a different
+  test from a longer `sleep`, not just a renamed one.
+- **A file-not-found child process fails exactly like a well-formed but
+  buggy one, from `⎕SHELL`'s side** — pointing `Shell.Start`'s `cmd` at
+  a script path that doesn't exist doesn't raise anything client-side;
+  the child (`python.exe`) starts, immediately prints "can't open
+  file" to stderr (silently discarded per D5/D11) and exits with code
+  `2`, which `Shell`/`JsonRpc` report as an ordinary process-exit
+  signal — indistinguishable, from the client's perspective, from any
+  other early crash. Worth remembering when a "the server crashed"
+  signal shows up unexpectedly during development: check the command
+  path resolves before assuming the server logic is at fault.

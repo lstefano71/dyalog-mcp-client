@@ -35,13 +35,23 @@ from.
 - **Multiple concurrent child processes per interpreter**: works today
   (each `Start` gets its own `⎕TALLOC` range), but untested beyond one at
   a time — verify once there's an actual multi-server use case.
-- **Process crash mid-`Receive`**: needs a defined behavior (currently:
-  should signal, but the exact signal/message shape hasn't been nailed
-  down against a real crash yet).
+- ~~Process crash mid-`Receive`~~ — confirmed via
+  `test/09-fixture-server-misbehaviors.apls`'s `crash` mode (ADR D14):
+  `Shell.Receive`/`JsonRpc.Call` signal with `'Shell.Receive: process
+  exited (reason <r>, code <c>)'`, `<c>` matching the exit code the
+  fixture server was told to exit with. No fix needed — this was
+  already the intended behavior, just previously unverified against an
+  actual mid-`Receive` crash.
 - **`Stop` force-kill**: currently waits up to ~10s for the child to exit
   after closing stdin, then gives up (still releases the token range
   regardless). Should force-kill via `8373⌶` (see `⎕SHELL`'s docs on
   abandoned child processes) if the deadline passes without a clean exit.
+  Concretely demonstrated (not just reasoned about) by `test/09`'s
+  `hang` mode: `Shell.Stop` waits the full ~10s and returns, but the
+  child process itself is left running forever afterward (confirmed via
+  `Get-Process python` still showing it) — closing stdin does nothing
+  for a server blocked in a wait with no timeout, and there's currently
+  no way to reap it short of an external kill.
 
 ## JSON-RPC layer
 
@@ -137,8 +147,9 @@ Still open:
 
 ## Testing
 
-- **Mocked stdio peer**: all tests currently run against the real
-  `fff-mcp.exe`. Add a canned-fixture/mock MCP server if the real binary
-  turns out too slow or flaky for routine runs, or to test error paths
-  `fff-mcp` won't naturally trigger (malformed responses, slow/hanging
-  server, mid-stream crash).
+- ~~Mocked stdio peer~~ — done: `examples/toy-jsonrpc-fixture-server.py`
+  (NDJSON-framed, `crash`/`garbage`/`hang`/`burst` methods) plus
+  `test/09-fixture-server-misbehaviors.apls` (ADR D14). Covers the four
+  misbehavior modes the real `fff-mcp.exe` never naturally triggers —
+  see the Shell layer/JSON-RPC layer sections below for what running it
+  surfaced.
