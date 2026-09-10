@@ -1,0 +1,11 @@
+# Dyalog workspaces / saved sessions
+*.dws
+*.dcfg
+
+# OS cruft
+Thumbs.db
+.DS_Store
+
+# Editor/IDE
+.vscode/
+.idea/

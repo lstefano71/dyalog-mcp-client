@@ -1,0 +1,14 @@
+# Normalize everything to LF in the repo; let git handle checkout
+# conversion per-platform instead of storing mixed line endings.
+* text=auto eol=lf
+
+# Dyalog source and test scripts are plain text; keep them LF on disk
+# in the repo regardless of what an editor/tool on Windows writes.
+*.dyalog text eol=lf
+*.apln   text eol=lf
+*.aplf   text eol=lf
+*.apls   text eol=lf
+*.dyapp  text eol=lf
+
+# Dyalog workspace files are binary.
+*.dws binary
