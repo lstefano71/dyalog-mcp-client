@@ -1,0 +1,160 @@
+#!/usr/local/bin/dyalogscript
+⍝ Phase 9: locks in the four previously-open Fff cover-layer parser
+⍝ shapes (see docs/adr/0001-architecture-decisions.md ADR D15 and
+⍝ TODO.md's "Fff cover layer" section) — auto-broadened queries,
+⍝ grep's path-only fallback, output_mode:'files_with_matches'/'count',
+⍝ and multi-file/large-context grouping under real pagination load.
+⍝
+⍝ Loaded from this worktree's own src/ (not the D:\devel\mcp-client
+⍝ root the sibling 01-08 tests hardcode) since this branch's fixes
+⍝ only exist here until merged — this agent works only inside its
+⍝ worktree. Connect's search target is this same worktree, for the
+⍝ same reason (it's "this repo" for this branch's purposes, per the
+⍝ task's own instruction to search "this repo itself").
+⎕IO←1
+⎕FIX'file://D:/devel/mcp-client/.claude/worktrees/agent-a9c43dc899d370691/src/Shell.dyalog'
+⎕FIX'file://D:/devel/mcp-client/.claude/worktrees/agent-a9c43dc899d370691/src/JsonRpc.dyalog'
+⎕FIX'file://D:/devel/mcp-client/.claude/worktrees/agent-a9c43dc899d370691/src/Mcp.dyalog'
+⎕FIX'file://D:/devel/mcp-client/.claude/worktrees/agent-a9c43dc899d370691/src/Fff.dyalog'
+
+h←Fff.Connect'D:\devel\mcp-client\.claude\worktrees\agent-a9c43dc899d370691'
+
+nFail←0
+
+⍝ --- 1. Auto-broadened query header --------------------------------
+⍝ "0 matches for '<q>'. Auto-broadened to '<q2>':" — Shown/Total must
+⍝ reflect the broadened result's real count (not the leading, always-
+⍝ 0 exact-match count), Broadened must carry <q2>, and the broadened
+⍝ results must still parse as Files. The second word is built by
+⍝ concatenation (not written contiguously anywhere in this file, this
+⍝ line included) so it names a real, rare identifier — exactly 2
+⍝ occurrences in this tree, both in one file — without this test file
+⍝ itself becoming a 3rd occurrence and pushing the retry over fff's
+⍝ own ≤10-matches threshold for accepting a broadened retry.
+rareWord←'_StripDef','Tag'
+r1←h Fff.Grep'zzzznonexistentword12345 ',rareWord
+⎕←'broadened: Shown=',(⍕r1.Shown),' Total=',(⍕r1.Total),' Broadened=[',r1.Broadened,'] files=',⍕≢r1.Files
+:If (r1.Broadened≢rareWord)∨(r1.Shown=0)∨(r1.Shown≠r1.Total)∨(0=≢r1.Files)
+    ⎕←'FAIL: expected a non-zero Shown/Total, Broadened=rareWord, and non-empty Files'
+    nFail←nFail+1
+:EndIf
+⍝ The broadened results must parse as genuine Files, not garbage —
+⍝ every Path must be non-blank and not itself a stray match/context
+⍝ line (the exact grouping bug ADR D12 fixed, re-checked here for the
+⍝ auto-broadened shape specifically).
+:If ~∧/0≠≢¨r1.Files.Path
+    ⎕←'FAIL: broadened result has a blank Path'
+    nFail←nFail+1
+:EndIf
+
+⍝ Same header, under output_mode:'files_with_matches' and 'count' —
+⍝ server.rs re-invokes GrepFormatter with the *original* output_mode
+⍝ for the broadened retry, so the embedded text is mode-formatted too.
+r1b←h Fff.Grep(('zzzznonexistentword12345 ',rareWord)(output_mode:'files_with_matches'))
+⎕←'broadened+files_with_matches: Shown=',(⍕r1b.Shown),' Broadened=[',r1b.Broadened,'] files=',⍕≢r1b.Files
+:If (r1b.Broadened≢rareWord)∨(0=≢r1b.Files)
+    ⎕←'FAIL: broadened+files_with_matches lost Broadened or Files'
+    nFail←nFail+1
+:EndIf
+
+r1c←h Fff.Grep(('zzzznonexistentword12345 ',rareWord)(output_mode:'count'))
+⎕←'broadened+count: Shown=',(⍕r1c.Shown),' Broadened=[',r1c.Broadened,'] counts=',⍕≢r1c.Counts
+:If (r1c.Broadened≢rareWord)∨(0=≢r1c.Counts)
+    ⎕←'FAIL: broadened+count lost Broadened or Counts'
+    nFail←nFail+1
+:EndIf
+
+⍝ --- 2. Path-only fallback ------------------------------------------
+⍝ "0 content matches. But there is a relevant file path: <p>" — <p>
+⍝ must land in SuggestedPath, not be silently dropped. A query that
+⍝ resembles a real filename closely enough for fff's fuzzy file-path
+⍝ scorer, but whose content never occurs verbatim (so grep's own
+⍝ content search and fuzzy-line fallback both come up empty first) —
+⍝ reversed (as test/06's no-hit query already does) so this file
+⍝ doesn't itself become a fuzzy self-match once it's part of the
+⍝ searched tree: plain concatenation wasn't enough, since fff's fuzzy
+⍝ fallback matches on similarity, not just exact substrings, and
+⍝ still found this very line.
+pathQuery←⌽'golaydlCcpRnosJ/qzqzz'
+r2←h Fff.Grep pathQuery
+⎕←'path-only fallback: Shown=',(⍕r2.Shown),' SuggestedPath=[',r2.SuggestedPath,']'
+:If (0≠r2.Shown)∨(0≠≢r2.Files)∨(0=≢r2.SuggestedPath)∨(~∨/'JsonRpcCl.dyalog'⍷r2.SuggestedPath)
+    ⎕←'FAIL: expected Shown=0, no Files, and a SuggestedPath naming JsonRpcCl.dyalog'
+    nFail←nFail+1
+:EndIf
+
+⍝ --- 3. output_mode:'files_with_matches' ----------------------------
+⍝ Never has a "N/Total matches" header (Shown/Total default to the
+⍝ file count) and, unlike every other mode, path lines can carry a
+⍝ genuine "[def]" tag — must be stripped into IsDef, not left riding
+⍝ along in Path.
+r3←h Fff.Grep('Namespace'(maxResults:10 ⋄ output_mode:'files_with_matches'))
+⎕←'files_with_matches: Shown=',(⍕r3.Shown),' Total=',(⍕r3.Total),' files=',(⍕≢r3.Files),' anyDef=',⍕∨/r3.Files.IsDef
+:If (r3.Shown≠r3.Total)∨(r3.Shown≠≢r3.Files)∨(0=≢r3.Files)
+    ⎕←'FAIL: expected Shown=Total=file count for files_with_matches'
+    nFail←nFail+1
+:EndIf
+:If ∨/∊'[def]'∘⍷¨r3.Files.Path
+    ⎕←'FAIL: a Path still carries its raw [def] tag — should be stripped into IsDef'
+    nFail←nFail+1
+:EndIf
+
+⍝ --- 4. output_mode:'count' -----------------------------------------
+⍝ One "{path}: {count}" line per file, no header, no per-line Matches
+⍝ at all — Counts is the mode-specific field; Files stays empty. Also
+⍝ locks in the _ToInt fix (ADR D15): Counts.Count, gathered via dot
+⍝ notation across several namespace refs, used to come out nested and
+⍝ DOMAIN ERROR any :If that tested it directly.
+r4←h Fff.Grep('Namespace'(maxResults:10 ⋄ output_mode:'count'))
+⎕←'count: Shown=',(⍕r4.Shown),' counts=',(⍕≢r4.Counts),' Files=',⍕≢r4.Files
+:If (0≠≢r4.Files)∨(0=≢r4.Counts)∨(r4.Shown≠+/r4.Counts.Count)
+    ⎕←'FAIL: expected empty Files, non-empty Counts, Shown = sum of counts'
+    nFail←nFail+1
+:EndIf
+:If ~∧/0<r4.Counts.Count
+    ⎕←'FAIL: every Counts entry should have a positive Count'
+    nFail←nFail+1
+:EndIf
+
+⍝ --- 5. Multi-file / large-context grouping stress ------------------
+⍝ A far larger context than the 1/2 used elsewhere, against a query
+⍝ with many hits spread over several files — re-checks the file-
+⍝ changes-when-path-line-seen grouping logic (ADR D12) doesn't
+⍝ corrupt under real pagination load. (Also verified by hand against
+⍝ the much larger D:\devel\fff source tree — see ADR D15 — but that
+⍝ tree isn't guaranteed present in every environment this test runs
+⍝ in, so the committed test stays scoped to this repo.)
+r5←h Fff.Grep(('_Pa','rse')(context:4 ⋄ maxResults:40))
+⎕←'stress: Shown=',(⍕r5.Shown),' Total=',(⍕r5.Total),' files=',(⍕≢r5.Files),' Cursor=[',r5.Cursor,']'
+kinds←(∊r5.Files.Matches).Kind
+⎕←'kind tally: Match=',(⍕+/'Match'∘≡¨kinds),' Context=',(⍕+/'Context'∘≡¨kinds),' DefContext=',(⍕+/'DefContext'∘≡¨kinds)
+:If 0=≢r5.Files
+    ⎕←'FAIL: expected at least one file for a ''_Parse'' grep with context:4'
+    nFail←nFail+1
+:EndIf
+:If ~∧/0≠≢¨r5.Files.Path
+    ⎕←'FAIL: stress probe produced a blank Path — file/match grouping likely corrupted'
+    nFail←nFail+1
+:EndIf
+⍝ Every Path must look like a path, not a leaked match/context line —
+⍝ i.e. never start with a digit followed by ':'/'-'/'|' (_ParseMatchLine's
+⍝ own annotated-line shapes).
+:For f :In r5.Files
+    ⍝ A real path re-run through _ParseMatchLine must never itself
+    ⍝ look like an annotated line (kind='').
+    (kind num txt)←Fff._ParseMatchLine' ',f.Path
+    :If 0≠≢kind
+        ⎕←'FAIL: Path looks like a leaked match/context line: [',f.Path,']'
+        nFail←nFail+1
+    :EndIf
+:EndFor
+
+⎕←'nFail=',⍕nFail
+:If nFail≠0
+    ⎕←'FAIL: ',(⍕nFail),' check(s) failed'
+:Else
+    ⎕←'all checks passed'
+:EndIf
+
+Fff.Disconnect h
+⎕OFF

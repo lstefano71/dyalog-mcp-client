@@ -13,3 +13,7 @@ Thumbs.db
 # Throwaway exploration scripts (see scratch/) — not part of the
 # committed test suite, personal-machine paths, not meant to be shared.
 scratch/
+
+# Claude Code's own local tooling state (worktrees for parallel
+# subagents, local settings) — not project content.
+.claude/
