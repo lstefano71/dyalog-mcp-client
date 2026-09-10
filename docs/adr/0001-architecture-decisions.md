@@ -231,6 +231,27 @@ Further implementation notes discovered while building it:
   *left argument*, not embedded inside the train** — `sep(≠⊆⊢)text`,
   not `(sep≠⊆⊢)text` (the latter is a monadic application of a 3-train
   missing its left argument entirely, a `SYNTAX ERROR`).
+- **`Output ('Null')` on stream 2, combined with an `Input ('Token' …)`
+  on stream 0 talking to a genuinely interactive child process,
+  reliably raises `DOMAIN ERROR: Invalid value received on token`** —
+  discovered wiring up `@modelcontextprotocol/server-memory` as a
+  second MCP server for the Tutorial (`fff-mcp` never logs to stderr,
+  so this went unnoticed through phases 1–4; `server-memory` does, on
+  every request). `Shell`'s default `Output` previously left stream 2
+  on its own default (merge into stream 1 — see main `Output` docs),
+  which corrupts the line-oriented protocol stream once a server
+  writes anything to stderr. The fix is **not** `Output (2 'Null')`
+  (that's what triggers the token error above) but a second `Callback`
+  on stream 2 that just discards its data (`Shell._OnStderr`) — same
+  destination *kind* as stream 1, just an inert sink.
+- **A tool result's `isError` field is optional, not guaranteed
+  present** — `fff-mcp` always includes it, but `server-memory` omits
+  it entirely on success (matching the spec, which only requires it
+  when true). Code reading `result.isError` directly from `Mcp.CallTool`
+  against an arbitrary server needs `0≠⎕NC'result.isError'` first;
+  `Fff._WithParsed` gets away with assuming it's present only because
+  `Fff` is deliberately scoped to `fff-mcp` alone (ADR D11's whole
+  premise), which does always set it.
 - **A named traditional function can't be passed as a plain value**
   in an ordinary expression (there's no first-class function value to
   hand to another function as data) — but it *can* be passed as an

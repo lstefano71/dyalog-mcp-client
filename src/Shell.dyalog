@@ -88,7 +88,15 @@
     ∇ {r}←_Run h
       ⍝ Runs on its own thread (spawned by Start via &). Blocks in
       ⍝ ⎕SHELL for the lifetime of the child process.
-      opts←('Input'(0('Token'h.InTok)))('Output'(1('Callback'('_OnOutput'h))))
+      ⍝ Stream 2 (stderr) must NOT be left on its default, which merges
+      ⍝ it into stream 1 — a server logging to stderr (perfectly legal;
+      ⍝ see ADR D5) would otherwise corrupt the line-oriented protocol
+      ⍝ stream our caller reads. Discard it via its own callback rather
+      ⍝ than Output ('Null') — that destination, combined with a Token
+      ⍝ input on a genuinely interactive child process, reliably
+      ⍝ triggers "Invalid value received on token" (see ADR D11);
+      ⍝ routing to a callback that just drops the data does not.
+      opts←('Input'(0('Token'h.InTok)))('Output'((1('Callback'('_OnOutput'h)))(2('Callback'('_OnStderr'h)))))
       :If 0≠≢h.WorkingDir
           opts,←⊂('WorkingDir'h.WorkingDir)
       :EndIf
@@ -112,6 +120,14 @@
       h.Lines,←lines
       h.SigTok ⎕TPUT h.SigTok
       r←1 ⍝ callback return value must be a Boolean scalar (continue)
+    ∇
+
+    ∇ {r}←h _OnStderr info
+      ⍝ Output ('Callback' ...) target for stream 2 — deliberately
+      ⍝ discards everything (see ADR D5/D11: a server's stderr logging
+      ⍝ is none of our business, and we can't use Output ('Null') here
+      ⍝ instead — see the comment in _Run).
+      r←1
     ∇
 
 :EndNamespace

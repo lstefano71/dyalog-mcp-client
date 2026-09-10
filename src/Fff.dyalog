@@ -142,6 +142,11 @@
       nl←⎕UCS 10
       text←(text≠⎕UCS 13)/text ⍝ tolerate \r\n as well as bare \n
       lines←nl(≠⊆⊢)text
+      suggestion←''
+      :If (0≠≢lines)∧(2≤≢⊃lines)∧('→ '≡2↑⊃lines)
+          suggestion←⊃lines
+          lines←1↓lines
+      :EndIf
       cursor←''
       :If (0≠≢lines)∧(8≤≢⊃¯1↑lines)∧('cursor: '≡8↑⊃¯1↑lines)
           cursor←8↓⊃¯1↑lines
@@ -157,7 +162,7 @@
       :Else
           shown←≢lines ⋄ total←shown
       :EndIf
-      parsed←(Shown:shown ⋄ Total:total ⋄ Cursor:cursor ⋄ Paths:lines)
+      parsed←(Shown:shown ⋄ Total:total ⋄ Cursor:cursor ⋄ Suggestion:suggestion ⋄ Paths:lines)
     ∇
 
     ∇ parsed←_ParseGrep text
