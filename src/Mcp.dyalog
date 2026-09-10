@@ -24,8 +24,8 @@
       jr #.JsonRpc.Notify'notifications/initialized'
       h←(
         JsonRpc:jr
-        ⋄ ServerInfo:resp.result.serverInfo
-        ⋄ ServerCapabilities:resp.result.capabilities
+        ServerInfo:resp.result.serverInfo
+        ServerCapabilities:resp.result.capabilities
       )
     ∇
 

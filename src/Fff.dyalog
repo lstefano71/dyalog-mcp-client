@@ -35,8 +35,8 @@
       mcpOpts←⎕NS(WorkingDir:path)opts
       h←(
         Mcp:mcpOpts #.Mcp.Connect,⊂exe
-        ⋄ Path:path
-        ⋄ Exe:exe
+        Path:path
+        Exe:exe
       )
     ∇
 

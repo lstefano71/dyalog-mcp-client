@@ -26,11 +26,11 @@
       tok←⎕TALLOC 1('mcp-client:',⊃cmd)
       h←(
         Cmd:cmd
-        ⋄ WorkingDir:opts ⎕VGET⊂'WorkingDir' ''
-        ⋄ Lines:⍬
-        ⋄ Status:'Running'
-        ⋄ ExitCode:¯1 ⋄ ExitReason:¯1 ⋄ Pid:¯1
-        ⋄ Tok:tok ⋄ InTok:tok+0.1 ⋄ SigTok:tok+0.2
+        WorkingDir:opts ⎕VGET⊂'WorkingDir' ''
+        Lines:⍬
+        Status:'Running'
+        ExitCode:¯1 ⋄ ExitReason:¯1 ⋄ Pid:¯1
+        Tok:tok ⋄ InTok:tok+0.1 ⋄ SigTok:tok+0.2
       )
       h.Tid←_Run&h ⍝ needs h to already exist, so can't join the literal above
     ∇

@@ -18,9 +18,9 @@
       :If 0=⎕NC'opts' ⋄ opts←() ⋄ :EndIf
       h←(
         Shell:opts #.Shell.Start cmd
-        ⋄ Timeout:opts ⎕VGET⊂'Timeout' 10
-        ⋄ NextId:1
-        ⋄ Notifications:⍬
+        Timeout:opts ⎕VGET⊂'Timeout' 10
+        NextId:1
+        Notifications:⍬
       )
     ∇
 
