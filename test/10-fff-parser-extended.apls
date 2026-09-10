@@ -5,19 +5,13 @@
 ⍝ grep's path-only fallback, output_mode:'files_with_matches'/'count',
 ⍝ and multi-file/large-context grouping under real pagination load.
 ⍝
-⍝ Loaded from this worktree's own src/ (not the D:\devel\mcp-client
-⍝ root the sibling 01-08 tests hardcode) since this branch's fixes
-⍝ only exist here until merged — this agent works only inside its
-⍝ worktree. Connect's search target is this same worktree, for the
-⍝ same reason (it's "this repo" for this branch's purposes, per the
-⍝ task's own instruction to search "this repo itself").
 ⎕IO←1
-⎕FIX'file://D:/devel/mcp-client/.claude/worktrees/agent-a9c43dc899d370691/src/Shell.dyalog'
-⎕FIX'file://D:/devel/mcp-client/.claude/worktrees/agent-a9c43dc899d370691/src/JsonRpc.dyalog'
-⎕FIX'file://D:/devel/mcp-client/.claude/worktrees/agent-a9c43dc899d370691/src/Mcp.dyalog'
-⎕FIX'file://D:/devel/mcp-client/.claude/worktrees/agent-a9c43dc899d370691/src/Fff.dyalog'
+⎕FIX'file://D:/devel/mcp-client/src/Shell.dyalog'
+⎕FIX'file://D:/devel/mcp-client/src/JsonRpc.dyalog'
+⎕FIX'file://D:/devel/mcp-client/src/Mcp.dyalog'
+⎕FIX'file://D:/devel/mcp-client/src/Fff.dyalog'
 
-h←Fff.Connect'D:\devel\mcp-client\.claude\worktrees\agent-a9c43dc899d370691'
+h←Fff.Connect'D:\devel\mcp-client'
 
 nFail←0
 
