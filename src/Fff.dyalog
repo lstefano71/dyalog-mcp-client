@@ -114,34 +114,75 @@
           shown←⍎n1↑header
           total←shown
           rest←n1↓header
-          :If (0≠≢rest)∧('/'=1⊃rest)
-              rest←1↓rest
-              n2←+/∧\rest∊digits
-              :If n2>0 ⋄ total←⍎n2↑rest ⋄ :EndIf
+          :If 0≠≢rest ⍝ ∧ isn't short-circuiting — see _ParseMatchLine
+              :If '/'=1⊃rest
+                  rest←1↓rest
+                  n2←+/∧\rest∊digits
+                  :If n2>0 ⋄ total←⍎n2↑rest ⋄ :EndIf
+              :EndIf
           :EndIf
       :EndIf
     ∇
 
-    ∇ (isMatch num text)←_ParseMatchLine line
-      ⍝ " 59: ⎕SHADOW'mdiSofia_def'" -> 1 59 "⎕SHADOW'mdiSofia_def'"
+    ∇ (kind num text)←_ParseMatchLine line
+      ⍝ Three annotated-line shapes fff-mcp emits (ground-truthed
+      ⍝ against crates/fff-mcp/src/output.rs in the fff source):
+      ⍝   " 59: ⎕SHADOW'mdiSofia_def'"   -> 'Match'      59 "⎕SHADOW'mdiSofia_def'"
+      ⍝   " 59-some context line"        -> 'Context'    59 "some context line"
+      ⍝   "  59| def MyFunction ..."     -> 'DefContext' 59 "def MyFunction ..."
+      ⍝ kind is '' (not one of these — a new file boundary) otherwise.
       digits←'0123456789'
-      isMatch←0 ⋄ num←0 ⋄ text←''
+      kind←'' ⋄ num←0 ⋄ text←''
       t←(+/∧\' '=line)↓line
       :If 0=≢t ⋄ :Return ⋄ :EndIf
       nd←+/∧\t∊digits
-      :If (nd>0)∧(nd<≢t)∧(':'=(nd+1)⊃t)
-          num←⍎nd↑t
-          text←(nd+1)↓t
-          :If (0≠≢text)∧(' '=1⊃text) ⋄ text←1↓text ⋄ :EndIf
-          isMatch←1
+      :If (nd>0)∧(nd<≢t)
+          sep←(nd+1)⊃t
+          :If sep∊':|-'
+              :Select sep
+              :Case ':' ⋄ kind←'Match'
+              :Case '|' ⋄ kind←'DefContext'
+              :Case '-' ⋄ kind←'Context'
+              :EndSelect
+              num←⍎nd↑t
+              text←(nd+1)↓t
+              ⍝ ∧ isn't short-circuiting in APL — 1⊃text on an empty
+              ⍝ text would INDEX ERROR if these were combined in one :If.
+              :If 0≠≢text
+                  :If ' '=1⊃text ⋄ text←1↓text ⋄ :EndIf
+              :EndIf
+          :EndIf
+      :EndIf
+    ∇
+
+    ∇ n←text _NumberBefore word
+      ⍝ The integer immediately preceding the first occurrence of word
+      ⍝ in text (e.g. "0 exact matches. 1 approximate:" 'approximate'
+      ⍝ -> 1), or 0 if word doesn't occur or nothing digit-like
+      ⍝ precedes it.
+      digits←'0123456789'
+      n←0
+      hits←⍸word⍷text
+      :If 0≠≢hits
+          seg←(¯1+⊃hits)↑text
+          :While (0≠≢seg)∧(' '=¯1↑seg) ⋄ seg←¯1↓seg ⋄ :EndWhile
+          nd←+/∧\digits∊⍨⌽seg
+          :If nd>0 ⋄ n←⍎¯nd↑seg ⋄ :EndIf
       :EndIf
     ∇
 
     ∇ parsed←_ParseFindFiles text
-      ⍝ "N/Total matches\n<path>\n...\n{cursor: <token>}"
+      ⍝ "N/Total matches\n<path>\n...\n{cursor: <token>}" — or, for no
+      ⍝ matches at all, the single line "0 results (N indexed)"
+      ⍝ (ground-truthed against fff's server.rs — note this is a
+      ⍝ different phrase from grep's "0 matches.").
       nl←⎕UCS 10
       text←(text≠⎕UCS 13)/text ⍝ tolerate \r\n as well as bare \n
       lines←nl(≠⊆⊢)text
+      :If (1=≢lines)∧(11≤≢⊃lines)∧('0 results ('≡11↑⊃lines)
+          parsed←(Shown:0 ⋄ Total:0 ⋄ Cursor:'' ⋄ Suggestion:'' ⋄ Paths:⍬)
+          :Return
+      :EndIf
       suggestion←''
       :If (0≠≢lines)∧(2≤≢⊃lines)∧('→ '≡2↑⊃lines)
           suggestion←⊃lines
@@ -166,14 +207,28 @@
     ∇
 
     ∇ parsed←_ParseGrep text
-      ⍝ "{→ Read <path> (only match)\n}N/Total matches shown\n
-      ⍝  <path>\n <num>: <line>\n...\n\n<path2>\n <num>: <line>\n..."
-      ⍝ TODO: doesn't yet recognize [def] file-header markers or the
-      ⍝ '|' context-line prefix mentioned in fff-mcp's own instructions
-      ⍝ — untriggered so far, see TODO.md.
+      ⍝ "{→ Read <path> (only match|[def]|(best match))\n}
+      ⍝  {N/Total matches shown\n}
+      ⍝  <path>\n <num>: <line>\n <num>-<context line>\n
+      ⍝   <num>| <definition context line>\n...\n{\ncursor: <token>}"
+      ⍝ Ground-truthed against fff's output.rs. Two header shapes are
+      ⍝ recognized but only degrade gracefully, not fully parsed —
+      ⍝ still yields Files correctly, Shown/Total stay 0 (see TODO.md):
+      ⍝   "0 matches for '<q>'. Auto-broadened to '<q2>':" (results for
+      ⍝   the broadened query follow, on subsequent lines)
+      ⍝   "0 content matches. But there is a relevant file path: <p>"
+      ⍝   (a bare suggestion, no Files at all)
       nl←⎕UCS 10
       text←(text≠⎕UCS 13)/text ⍝ tolerate \r\n as well as bare \n
       lines←nl(≠⊆⊢)text
+      ⍝ Unlike find_files, grep/multi_grep's cursor line is preceded
+      ⍝ by a blank line (harmless: the per-file loop below skips blank
+      ⍝ lines anyway) rather than following directly.
+      cursor←''
+      :If (0≠≢lines)∧(8≤≢⊃¯1↑lines)∧('cursor: '≡8↑⊃¯1↑lines)
+          cursor←8↓⊃¯1↑lines
+          lines←¯1↓lines
+      :EndIf
       suggestion←''
       :If (0≠≢lines)∧(2≤≢⊃lines)∧('→ '≡2↑⊃lines)
           suggestion←⊃lines
@@ -186,16 +241,22 @@
           ⍝ result (the → Read suggestion line already says as much) —
           ⍝ same "no header when redundant" pattern as find_files.
           :If ∨/'matches'⍷⊃lines
-              (shown total)←_ParseCount⊃lines
+              :If ∨/'approximate'⍷⊃lines
+                  ⍝ "0 exact matches. N approximate:" — the meaningful
+                  ⍝ count is N (approximate), not the leading 0 (exact).
+                  shown←total←(⊃lines)_NumberBefore'approximate'
+              :Else
+                  (shown total)←_ParseCount⊃lines
+              :EndIf
               lines←1↓lines
               hadHeader←1
           :EndIf
           curPath←'' ⋄ curMatches←⍬
           :For ln :In lines
-              :If 0=≢ln ⋄ :Continue ⋄ :EndIf
-              (isMatch num mtext)←_ParseMatchLine ln
-              :If isMatch
-                  curMatches,←⊂(LineNum:num ⋄ Text:mtext)
+              :If (0=≢ln)∨(ln≡'--') ⋄ :Continue ⋄ :EndIf ⍝ blank/ripgrep-style separator
+              (kind num mtext)←_ParseMatchLine ln
+              :If 0≠≢kind
+                  curMatches,←⊂(LineNum:num ⋄ Text:mtext ⋄ Kind:kind)
               :Else
                   :If 0≠≢curPath ⋄ files,←⊂(Path:curPath ⋄ Matches:curMatches) ⋄ :EndIf
                   curPath←ln ⋄ curMatches←⍬
@@ -204,9 +265,12 @@
           :If 0≠≢curPath ⋄ files,←⊂(Path:curPath ⋄ Matches:curMatches) ⋄ :EndIf
       :EndIf
       :If (~hadHeader)∧(0≠≢files)
-          shown←total←+/{≢⍵.Matches}¨files
+          ⍝ Only count real matches, not context/definition-context
+          ⍝ lines riding along with them.
+          n←+/'Match'∘≡¨(∊files.Matches).Kind
+          shown←total←n
       :EndIf
-      parsed←(Shown:shown ⋄ Total:total ⋄ Suggestion:suggestion ⋄ Files:files)
+      parsed←(Shown:shown ⋄ Total:total ⋄ Cursor:cursor ⋄ Suggestion:suggestion ⋄ Files:files)
     ∇
 
 :EndNamespace

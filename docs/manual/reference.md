@@ -293,10 +293,15 @@ this repo before being included here)
 ### `result←h Grep args`
 
 `args` is a query (character vector) or a `(query opts)` pair — `opts`
-may set `cursor`/`maxResults`/`context`/`output_mode`. Wraps `grep`.
-Result fields: `Shown`, `Total`, `Suggestion`, `Files` (vector of
-`(Path Matches)` namespaces, each `Matches` a vector of
-`(LineNum Text)` namespaces).
+may set `cursor`/`maxResults`/`context`/`output_mode` (`output_mode`
+values besides the default aren't parsed yet — see `TODO.md`). Wraps
+`grep`. Result fields: `Shown`, `Total`, `Cursor`, `Suggestion`,
+`Files` (vector of `(Path Matches)` namespaces, each `Matches` a
+vector of `(LineNum Text Kind)` namespaces — `Kind` is `'Match'`
+(a real hit, `" N: text"`), `'Context'` (an explicit `context:N` line,
+`" N-text"`), or `'DefContext'` (fff auto-expanding a definition's
+body, `"  N| text"` — this can appear even without `context` set,
+whenever a hit is itself a definition).
 
 ```apl
 r2←h Fff.Grep('Namespace'(maxResults:5))
@@ -306,11 +311,13 @@ r2←h Fff.Grep('Namespace'(maxResults:5))
     ⎕←' first file: ',f.Path,' (',(⍕≢f.Matches),' matches)'
     :If 0≠≢f.Matches
         m←⊃f.Matches
-        ⎕←'  line ',(⍕m.LineNum),': ',m.Text
+        ⎕←'  [',m.Kind,'] line ',(⍕m.LineNum),': ',m.Text
     :EndIf
 :EndIf
 ```
-(`test/06-fff-cover.apls`)
+(adapted from `test/06-fff-cover.apls` to also print `Kind`; run once
+against `fff-mcp.exe` in this repo before being included here — see
+`test/07-fff-parser-groundtruth.apls` for a dedicated `Kind` check)
 
 A zero-hit query parses cleanly to empty results, not a crash:
 

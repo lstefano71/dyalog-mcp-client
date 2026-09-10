@@ -1,0 +1,54 @@
+#!/usr/local/bin/dyalogscript
+⍝ Exercises the fff-mcp text shapes ground-truthed against the fff
+⍝ source itself (D:\devel\fff, crates/fff-mcp) rather than just
+⍝ observed empirically — see docs/adr/0001-architecture-decisions.md
+⍝ ADR D11 and TODO.md's Fff cover layer section.
+⎕IO←1
+⎕FIX'file://D:/devel/mcp-client/src/Shell.dyalog'
+⎕FIX'file://D:/devel/mcp-client/src/JsonRpc.dyalog'
+⎕FIX'file://D:/devel/mcp-client/src/Mcp.dyalog'
+⎕FIX'file://D:/devel/mcp-client/src/Fff.dyalog'
+
+h←Fff.Connect'D:\devel\mcp-client'
+
+⍝ find_files with zero hits: fff's own text is "0 results (N indexed)",
+⍝ a different phrase from grep's "0 matches." — must not be misread as
+⍝ a bogus single-path result.
+r1←h Fff.Find⌽'zzz_hctam_on_ylniatrec_zzz'
+⎕←'empty find_files: shown=',(⍕r1.Shown),' total=',(⍕r1.Total),' paths=',(⍕≢r1.Paths)
+:If (r1.Shown≠0)∨(r1.Total≠0)∨(0≠≢r1.Paths)
+    ⎕←'FAIL: expected an all-zero empty result'
+:EndIf
+
+⍝ An explicit `context` line is rendered with a HYPHEN separator
+⍝ (" N-text"), not the colon a real match uses (" N: text") — and a
+⍝ "--" line separates match groups. Both must parse as first-class
+⍝ Matches entries (Kind='Context'), not get misread as bogus new
+⍝ file-path boundaries.
+r2←h Fff.Grep('*.dyalog _ParseCount'(context:1 ⋄ maxResults:3))
+⎕←'context probe: files=',⍕≢r2.Files
+kinds←(∊r2.Files.Matches).Kind
+⎕←'kinds seen: ',⍕kinds
+:If ~∨/'Context'∘≡¨kinds
+    ⎕←'FAIL: expected at least one Context-kind entry with context:1'
+:EndIf
+
+⍝ grep/multi_grep's cursor comes from an internal file-scan page limit
+⍝ (50 files per fff's GrepSearchOptions) — independent of maxResults
+⍝ truncating the match count, and not reliably triggerable against a
+⍝ repo this small. Test the extraction logic directly instead, against
+⍝ a hand-built sample matching the documented shape: "\ncursor: N"
+⍝ (a blank line, then the cursor) rather than find_files' bare
+⍝ trailing line — must still be extracted, and the blank line must not
+⍝ corrupt file/match grouping.
+nl←⎕UCS 10
+sample←'src/a.dyalog',nl,' 1: hit',nl,nl,'cursor: 42'
+p←Fff._ParseGrep sample
+⎕←'synthetic cursor=[',p.Cursor,'] files=',⍕≢p.Files
+:If (p.Cursor≢'42')∨(1≠≢p.Files)
+    ⎕←'FAIL: expected cursor=42 and exactly one file'
+:EndIf
+
+Fff.Disconnect h
+⎕←'done'
+⎕OFF

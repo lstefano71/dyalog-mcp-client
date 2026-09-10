@@ -23,11 +23,11 @@ from.
 
 ## Shell layer
 
-- **Stderr handling**: v1 relies on `⎕SHELL`'s default of merging stream 2
-  into stream 1. MCP servers may log to stderr; if a server's stderr
-  chatter ever needs to be inspected (debugging a misbehaving server), add
-  a separate `Output` redirection + callback for stream 2, kept apart from
-  the stdout line queue.
+- **Inspecting stderr**: stream 2 is discarded (`Shell._OnStderr`, ADR
+  D11) rather than merged into stream 1 or captured — correct for
+  keeping the protocol stream clean, but there's currently no way to
+  see what a server logged there if you need to debug it. Add an
+  optional second queue (`h.StderrLines`, say) if that's ever needed.
 - **Multiple concurrent child processes per interpreter**: works today
   (each `Start` gets its own `⎕TALLOC` range), but untested beyond one at
   a time — verify once there's an actual multi-server use case.
@@ -56,28 +56,39 @@ from.
 
 ## Fff cover layer
 
-- **Text-format variants not yet handled** by `Fff._ParseGrep`/
-  `_ParseFindFiles` (all discovered while testing, see ADR D11):
-  - `[def]` file-header markers and `|` context-line prefixes,
-    mentioned in fff-mcp's own `instructions` text but not yet
-    triggered by any query tried so far.
-  - The fuzzy-fallback header shape, e.g. `"0 exact matches. 1
-    approximate:"` — currently falls through to `_ParseCount`'s plain
-    leading-digit reading (giving `Shown=0`, since the header starts
-    with the *exact*-match count, not the approximate one) rather than
-    being recognized as its own shape with its own file-list section.
-  - Multi-file `grep`/`multi_grep` blocks beyond the small examples
-    tested — separator/spacing between file blocks under heavier load
-    (many files, `context` lines around a match) is inferred, not
-    exhaustively verified.
-- **`output_mode` other than the default `'content'`** isn't
-  interpreted — `_ParseGrep` assumes content-mode text; a different
-  `output_mode` would need its own parser or an explicit "unparsed"
-  fallback keyed off the request, not just the response shape.
-- **Cursor is not currently usable for `grep`/`multi_grep`** the way it
-  is for `find_files` — `_ParseGrep` doesn't extract a cursor line at
-  all (unconfirmed whether grep results ever include one in the text,
-  as opposed to only via a JSON field outside `content.text`).
+Ground-truthed against the fff source itself (`D:\devel\fff`,
+`crates/fff-mcp/src/{server,output,cursor}.rs`, `crates/fff-core`) as
+of the commit checked out there — not just observed empirically. Fixed
+two real bugs this surfaced: `find_files`' own `"0 results (N indexed)"`
+empty-result phrasing wasn't recognized (a different phrase from
+grep's `"0 matches."`, and used to be misread as one bogus path); and
+a definition-context match line (`"  N| text"`, two spaces + pipe —
+extremely common, since it's rendered whenever a matched line happens
+to be a definition, with no `context` param needed) was misparsed as a
+spurious new file boundary, corrupting file/match grouping from that
+point on. `Matches` entries now carry a `Kind` (`'Match'`|`'Context'`|
+`'DefContext'`) rather than being assumed all real matches — see
+`docs/manual/reference.md`.
+
+Still open:
+- **`"0 matches for '<q>'. Auto-broadened to '<q2>':"`** (grep retries
+  a multi-word query with the first word dropped when the exact query
+  gets 0 hits) — the broadened results that follow parse fine as
+  `Files`, but `Shown`/`Total` stay `0` (read off the leading, always-0
+  count in that header) rather than reflecting the broadened count.
+- **`"0 content matches. But there is a relevant file path: <p>"`**
+  (grep's path-only fallback) — parses to an empty result; the
+  suggested path itself isn't extracted into a structured field.
+- **`output_mode` values other than the default (`'content'`, which
+  the source shows is actually identical to `'usage'`)** —
+  `'files_with_matches'` and `'count'` produce structurally different
+  text (confirmed in `output.rs`: e.g. `'files_with_matches'` is the
+  *only* mode with a genuine per-file `[def]` tag) that `_ParseGrep`
+  doesn't attempt to read at all.
+- **Multi-file blocks under real pagination load** (many files, a
+  `context` far larger than tested) — the file-changes-when-path-line-
+  seen grouping logic is confirmed correct in principle from the
+  source, but only exercised here against small, few-file results.
 
 ## MCP layer
 

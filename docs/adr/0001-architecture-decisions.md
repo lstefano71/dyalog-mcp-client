@@ -195,6 +195,62 @@ reads the same as every other namespace literal in the codebase.
 namespaces at once — isn't needed yet, since nothing here currently
 fans one value out to multiple targets. Noted for when it is.)
 
+### D12. `Fff` parser rewritten against fff's own source, not just observation
+
+The fff source is available locally (`D:\devel\fff`). Once that's true,
+"best-effort, ground it in whatever the server happens to output" (D11)
+stops being an excuse to guess — `crates/fff-mcp/src/{server,output,
+cursor}.rs` and `crates/fff-core` are the actual ground truth for every
+text shape `Fff._ParseFindFiles`/`_ParseGrep` reads. Re-deriving the
+parser against that source (rather than only against observed test
+output) surfaced two real bugs no amount of additional *observed*
+testing against this small repo would likely have found:
+
+- `find_files`' empty-result text is `"0 results (N indexed)"` — a
+  different phrase from grep's `"0 matches."`, not just a variant of
+  it — and wasn't recognized, so it was silently misread as one bogus
+  path (`Shown=1, Total=1, Paths=(⊂'0 results (N indexed)')`).
+- A **definition-context** match line — `"  {n}| {text}"`, two leading
+  spaces then a pipe, rendered by `output.rs` whenever a matched line
+  happens to itself be a definition, with **no `context` parameter
+  needed to trigger it** — was misread as a non-match line, so it
+  incorrectly started a new "file" boundary and corrupted every
+  subsequent match's file grouping in that response. Given how common
+  it is to grep for something that's a definition, this was likely
+  the single most-impactful latent bug in the parser.
+
+`Matches` entries now carry a `Kind` (`'Match'` | `'Context'`
+(`"{n}-{text}"`, an explicit `context:N` line) | `'DefContext'`) rather
+than assuming every annotated line is a real match. TODO.md tracks
+what the source confirmed exists but still isn't parsed (the
+auto-broadened-query and path-only-fallback header shapes, and
+`output_mode` values besides the default).
+
+Two general APL gotchas fell out of writing this, worth keeping in
+mind everywhere, not just here:
+
+- **`∧`/`∨` are not short-circuiting** — `(0≠≢text)∧(' '=1⊃text)`
+  still evaluates `1⊃text` even when `text` is empty, so it still
+  `INDEX ERROR`s. (Monadic `⊃`/`↑` on an empty array are fine —
+  `⊃`/`↑` never index, they disclose/pad with a fill element — it's
+  specifically an explicit dyadic pick like `1⊃`/`¯1⊃` that needs the
+  length check to actually *precede* it, in a separate `:If`, not
+  merely appear alongside it in one `∧`.)
+- **A multi-character left argument to `≡¨`/`∊` compares
+  element-by-element, not as one unit** — `'Match'≡¨kinds` pairs each
+  of `'Match'`'s own 5 characters against `kinds` (a `LENGTH ERROR`
+  unless `kinds` happens to have exactly 5 elements); the fix is
+  `'Match'∘≡¨kinds` (bind `'Match'` as a constant per application) or
+  enclosing it first. Same trap for membership: `'Context'∊kinds`
+  tests each *character* of `'Context'` for membership, not the whole
+  string — needs `(⊂'Context')∊kinds` or `∨/'Context'∘≡¨kinds` instead.
+
+Also: dot notation distributes over an array of namespace references
+directly — `files.Matches` *is* `{⍵.Matches}¨files`, no explicit `¨`
+needed. Used throughout the rewritten parser (e.g.
+`(∊files.Matches).Kind`), and worth defaulting to over the `{⍵.Field}¨`
+spelling wherever the left side is already a plain array of refs.
+
 ### D11. `Fff`: a version-specific cover over fff-mcp, plus its parser
 
 `Fff` is a high-level cover over `Mcp`, specific to fff-mcp (tested
