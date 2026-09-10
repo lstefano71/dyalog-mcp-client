@@ -9,21 +9,39 @@ from.
 
 - ~~A Content-Length-framed transport~~ — done: `JsonRpcCl` (ADR D13).
   Still open on top of it:
-  - **No cover built on it yet** — `JsonRpcCl` was verified directly
-    (a toy server, and manually against real `pyright-langserver`),
-    but nothing like `Mcp`/`Fff` exists on top of it. A minimal LSP
-    cover (`initialize`/`textDocument/didOpen`/`textDocument/hover`,
-    say) would be the natural next step if there's ever a reason to
-    actually use a language server from this client, not just prove
-    the transport talks to one.
+  - ~~No cover built on it yet~~ — done: `Lsp` (ADR D16), a minimal
+    LSP cover (`initialize`/`initialized`/`shutdown`/`exit`/
+    `textDocument/didOpen`/`textDocument/hover`), verified against
+    real `pyright-langserver` — see `src/Lsp.dyalog`,
+    `test/11-lsp-cover.apls`. Still open on top of *that*:
+    - **Everything else LSP defines** — `textDocument/didChange`/
+      `didClose` (so a session can edit past the initial `didOpen`),
+      `textDocument/completion`, `textDocument/definition`,
+      `textDocument/references`, published diagnostics
+      (`textDocument/publishDiagnostics`, a server-initiated
+      notification — would need the notification-dispatch item below
+      to actually react to one rather than just queue it), workspace
+      folders (`workspaceFolders` instead of always sending `rootUri`
+      as `null`). None of these were needed to prove the cover works;
+      add whichever one an actual use case needs.
+    - **`capabilities:()` (empty) may not be enough for every
+      server** — it was enough for `pyright-langserver` to answer
+      `initialize`/`hover` usefully, but a server that gates specific
+      features behind an advertised client capability (e.g.
+      `textDocument.hover.contentFormat` for markdown vs. plaintext
+      hover content) hasn't been tested; expand `Lsp.Connect`'s
+      `capabilities` object if a target server needs it.
   - **Same gaps `JsonRpc` has, largely un-re-litigated**: single
     in-flight `Call` only (ADR D7's reasoning applies equally here),
     no `Stop`/`Disconnect` force-kill fallback (same as the `Shell.Stop`
     TODO below), batch requests not implemented.
-  - **The real-LSP verification isn't a committed automated test** —
-    it needs network access and an npm install (`npx -y -p pyright
-    pyright-langserver --stdio`) on first run, unlike everything else
-    in this repo. Worth reconsidering if this project ever gets CI.
+  - **The real-LSP verification is now a committed test**
+    (`test/11-lsp-cover.apls`), unlike the note below might suggest at
+    a glance — but it's the one test in the suite that needs network
+    access and an npm install (`npx -y -p pyright pyright-langserver
+    --stdio`) on first run, unlike everything else in this repo.
+    Worth reconsidering if this project ever gets CI without network
+    access.
 
 ## Shell layer
 

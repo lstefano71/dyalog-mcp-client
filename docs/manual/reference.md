@@ -453,3 +453,90 @@ h.Timeout←2
 
 Same `args` shape as `Call`; sends a notification (no id), doesn't
 wait for a response. See `JsonRpc.Notify` — identical semantics.
+
+---
+
+## `Lsp` — a minimal LSP cover over `JsonRpcCl`
+
+A cover, in the `Fff`/`Mcp` sense, but general-purpose rather than
+server-specific — it implements LSP semantics, not a particular
+language server's quirks, so it should work against any spec-
+compliant LSP server, the same way `Mcp` works against any MCP server.
+Verified against `pyright-langserver`. v1 scope is deliberately narrow
+(same spirit as `Mcp`'s, ADR D8): the `initialize`/`initialized`
+handshake, `shutdown`/`exit`, `textDocument/didOpen`,
+`textDocument/hover`. See ADR D16 and `TODO.md` for what's not
+implemented. Source: `src/Lsp.dyalog`.
+
+**Handle fields** (in addition to the `JsonRpcCl` handle it wraps, at
+`h.JsonRpcCl`): `ServerCapabilities`, `ServerInfo` (only present if the
+server actually sent one — unlike MCP, LSP doesn't require it, and
+`pyright-langserver` doesn't send it).
+
+### `h←{opts}Connect cmd`
+
+Connects via `JsonRpcCl.Connect`, then performs the `initialize`
+request (`processId`/`rootUri` sent as JSON `null` — `⊂'null'`,
+ADR D11/D13/D16 — `capabilities` an empty object; verified this is
+enough for `pyright-langserver` to answer usefully) followed by the
+`initialized` notification (LSP's analogue of MCP's
+`notifications/initialized`, but named just `'initialized'`, with an
+*empty params object*, not no params at all — pyright doesn't respond
+usefully to later requests without it). Signals if the server rejects
+`initialize`.
+
+```apl
+opts←(Timeout:90)
+h←opts Lsp.Connect'cmd.exe' '/C' 'npx' '-y' '-p' 'pyright' 'pyright-langserver' '--stdio'
+⎕←'connected, capabilities: ',⍕h.ServerCapabilities.⎕NL ¯2
+```
+(`test/11-lsp-cover.apls`)
+
+### `{r}←Disconnect h`
+
+Performs LSP's clean-shutdown convention — a `shutdown` request, then
+an `exit` notification — before falling through to
+`JsonRpcCl.Disconnect`'s own stdin-close/wait behavior (kept
+unconditionally, in case a server doesn't honor `exit`).
+
+```apl
+Lsp.Disconnect h
+⎕←'status after disconnect=',h.JsonRpcCl.Status
+```
+(`test/11-lsp-cover.apls`)
+
+### `{r}←h DidOpen args`
+
+`args` is `(uri text)` or `(uri text languageId)` (`languageId`
+defaults to `'python'`). Wraps `textDocument/didOpen` — a notification,
+no response. Per spec, `text` is authoritative regardless of what's on
+disk at `uri`; confirmed against pyright (`uri` need not name a file
+that exists at all for hover to work off `text`), but the committed
+test still opens a real file, for a realistic worked example.
+
+```apl
+h Lsp.DidOpen(uri text 'python')
+```
+(`test/11-lsp-cover.apls`)
+
+### `result←h Hover args`
+
+`args` is `(uri line character)` — `line`/`character` are LSP's own
+0-based position convention (unrelated to `⎕IO`). Wraps
+`textDocument/hover`. A **protocol-level** error signals; a
+legitimate "nothing to say about this position" is JSON `null`,
+returned as ordinary data — LSP's version of the isError-vs-fault
+distinction ADR D6/D11 made for `Mcp.CallTool`. `⎕JSON` represents
+JSON `null` coming *in* the same way it represents `true`/`false`
+coming in — as `⊂'null'`, an enclosed character vector, confirmed
+empirically (ADR D16) — so check for it with `result≡⊂'null'`, not
+by looking for an absent field.
+
+```apl
+r←h Lsp.Hover(uri 2 4)
+⎕←'hover result: ',r.contents.value
+
+r2←h Lsp.Hover(uri 1 0)
+⎕←'no-hover-info result is JSON null: ',⍕r2≡⊂'null'
+```
+(`test/11-lsp-cover.apls`)
