@@ -425,7 +425,7 @@ see `TODO.md` for what's out (`didChange`/`didClose`, `completion`,
 
 Verified against real `pyright-langserver` (`npx -y -p pyright
 pyright-langserver --stdio`, the same invocation D13 used) —
-`test/09-lsp-cover.apls`: `initialize`/`initialized` handshake,
+`test/11-lsp-cover.apls`: `initialize`/`initialized` handshake,
 `ServerCapabilities` populated, `textDocument/didOpen` on a real
 `.py` fixture followed by `textDocument/hover` over a stdlib call
 (`os.getcwd()`) returning real hover content (`"(function) def

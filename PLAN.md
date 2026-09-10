@@ -17,7 +17,7 @@ Built on top of `JsonRpcCl`, general-purpose in the same sense `Mcp` is
 `Lsp.Connect`/`Disconnect` perform the `initialize`/`initialized`
 handshake and `shutdown`/`exit`; `Lsp.DidOpen`/`Hover` wrap
 `textDocument/didOpen`/`textDocument/hover`. Verified against real
-`pyright-langserver` (`test/09-lsp-cover.apls`) — connect, open a real
+`pyright-langserver` (`test/11-lsp-cover.apls`) — connect, open a real
 file, hover over a stdlib call and get back real hover content, hover
 over a blank line and get back JSON `null` as ordinary data (not a
 signal). See ADR D16 and `TODO.md` for what's deliberately out of

@@ -444,7 +444,7 @@ opts←(Timeout:90)
 h←opts Lsp.Connect'cmd.exe' '/C' 'npx' '-y' '-p' 'pyright' 'pyright-langserver' '--stdio'
 ⎕←'connected, capabilities: ',⍕h.ServerCapabilities.⎕NL ¯2
 ```
-(`test/09-lsp-cover.apls`)
+(`test/11-lsp-cover.apls`)
 
 ### `{r}←Disconnect h`
 
@@ -457,7 +457,7 @@ unconditionally, in case a server doesn't honor `exit`).
 Lsp.Disconnect h
 ⎕←'status after disconnect=',h.JsonRpcCl.Status
 ```
-(`test/09-lsp-cover.apls`)
+(`test/11-lsp-cover.apls`)
 
 ### `{r}←h DidOpen args`
 
@@ -471,7 +471,7 @@ test still opens a real file, for a realistic worked example.
 ```apl
 h Lsp.DidOpen(uri text 'python')
 ```
-(`test/09-lsp-cover.apls`)
+(`test/11-lsp-cover.apls`)
 
 ### `result←h Hover args`
 
@@ -493,4 +493,4 @@ r←h Lsp.Hover(uri 2 4)
 r2←h Lsp.Hover(uri 1 0)
 ⎕←'no-hover-info result is JSON null: ',⍕r2≡⊂'null'
 ```
-(`test/09-lsp-cover.apls`)
+(`test/11-lsp-cover.apls`)

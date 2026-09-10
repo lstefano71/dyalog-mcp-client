@@ -13,7 +13,7 @@ from.
     LSP cover (`initialize`/`initialized`/`shutdown`/`exit`/
     `textDocument/didOpen`/`textDocument/hover`), verified against
     real `pyright-langserver` — see `src/Lsp.dyalog`,
-    `test/09-lsp-cover.apls`. Still open on top of *that*:
+    `test/11-lsp-cover.apls`. Still open on top of *that*:
     - **Everything else LSP defines** — `textDocument/didChange`/
       `didClose` (so a session can edit past the initial `didOpen`),
       `textDocument/completion`, `textDocument/definition`,
@@ -36,7 +36,7 @@ from.
     no `Stop`/`Disconnect` force-kill fallback (same as the `Shell.Stop`
     TODO below), batch requests not implemented.
   - **The real-LSP verification is now a committed test**
-    (`test/09-lsp-cover.apls`), unlike the note below might suggest at
+    (`test/11-lsp-cover.apls`), unlike the note below might suggest at
     a glance — but it's the one test in the suite that needs network
     access and an npm install (`npx -y -p pyright pyright-langserver
     --stdio`) on first run, unlike everything else in this repo.
