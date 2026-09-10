@@ -38,6 +38,31 @@ from.
 - **Batch requests**: JSON-RPC 2.0 batching is not implemented; MCP
   2025-06-18 doesn't require it either.
 
+## Fff cover layer
+
+- **Text-format variants not yet handled** by `Fff._ParseGrep`/
+  `_ParseFindFiles` (all discovered while testing, see ADR D11):
+  - `[def]` file-header markers and `|` context-line prefixes,
+    mentioned in fff-mcp's own `instructions` text but not yet
+    triggered by any query tried so far.
+  - The fuzzy-fallback header shape, e.g. `"0 exact matches. 1
+    approximate:"` — currently falls through to `_ParseCount`'s plain
+    leading-digit reading (giving `Shown=0`, since the header starts
+    with the *exact*-match count, not the approximate one) rather than
+    being recognized as its own shape with its own file-list section.
+  - Multi-file `grep`/`multi_grep` blocks beyond the small examples
+    tested — separator/spacing between file blocks under heavier load
+    (many files, `context` lines around a match) is inferred, not
+    exhaustively verified.
+- **`output_mode` other than the default `'content'`** isn't
+  interpreted — `_ParseGrep` assumes content-mode text; a different
+  `output_mode` would need its own parser or an explicit "unparsed"
+  fallback keyed off the request, not just the response shape.
+- **Cursor is not currently usable for `grep`/`multi_grep`** the way it
+  is for `find_files` — `_ParseGrep` doesn't extract a cursor line at
+  all (unconfirmed whether grep results ever include one in the text,
+  as opposed to only via a JSON field outside `content.text`).
+
 ## MCP layer
 
 - **`resources/*`** — not implemented; add when a target server exposes

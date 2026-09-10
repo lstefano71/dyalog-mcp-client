@@ -194,3 +194,45 @@ reads the same as every other namespace literal in the codebase.
 (`⎕VGET`'s sibling `⎕VSET` — writing several names into one or more
 namespaces at once — isn't needed yet, since nothing here currently
 fans one value out to multiple targets. Noted for when it is.)
+
+### D11. `Fff`: a version-specific cover over fff-mcp, plus its parser
+
+`Fff` is a high-level cover over `Mcp`, specific to fff-mcp (tested
+against v0.10.6): `Connect`/`Disconnect` keep one fff-mcp instance alive
+against a directory (need not be a git repo — confirmed working, just
+slower to index a large non-git tree on a cold process), and
+`Find`/`Grep`/`MultiGrep` wrap `find_files`/`grep`/`multi_grep` with the
+established `(value)`/`(value opts)` argument shape. A parser turns the
+plain-text `content` fff-mcp returns into structured fields — deliberately
+version-specific (per the user), best-effort, and never lossy: `Raw`
+(the full `Mcp.CallTool` result) and `Text` (the extracted content
+string) are always present on the result, whatever the parser did or
+didn't recognize. One page per call (no auto-pagination); the `cursor`
+`find_files` returns is exposed for the caller to feed back in, not
+followed automatically — this avoids an unbounded-cost surprise on a
+call against a huge tree. See TODO.md for the text-format variants
+(`[def]` markers, `|` context lines, the fuzzy-fallback header, non-
+`content` `output_mode`) the parser doesn't yet handle.
+
+Further implementation notes discovered while building it:
+
+- **`⎕JSON` represents JSON `true`/`false` as `⊂'true'`/`⊂'false'`**,
+  not `1`/`0` (this is documented behavior, just easy to forget) — code
+  that branches on a parsed boolean field must disclose and compare
+  against the text, e.g. `(⊃ns.isError)≡'true'`, not `~ns.isError`
+  (which is a `DOMAIN ERROR`: negating a character vector).
+- **`⎕NQ'.' 'GetEnvironment' name` returned empty for every variable
+  tried (`DYALOG`, `USERPROFILE`, `LOCALAPPDATA`, `PATH`) under
+  `dyalogscript`** — it may only work against a full interactive/GUI
+  session object, not this headless runtime. `Fff._DefaultExe` reads
+  `%LOCALAPPDATA%` via a trivial child process
+  (`⎕SHELL⍠('Shell'('cmd.exe' '/C'))⊢'echo %LOCALAPPDATA%'`) instead.
+- **The `A(≠⊆⊢)B` line-split idiom needs its separator as the train's
+  *left argument*, not embedded inside the train** — `sep(≠⊆⊢)text`,
+  not `(sep≠⊆⊢)text` (the latter is a monadic application of a 3-train
+  missing its left argument entirely, a `SYNTAX ERROR`).
+- **A named traditional function can't be passed as a plain value** the
+  way a dfn or an operator-derived function can (e.g. `raw f g` where
+  `g` is meant to be "the parser to use") — `Fff._WithParsed` dispatches
+  on a character-vector selector (`'FindFiles'`/`'Grep'`) via `:Select`
+  instead of taking a function reference.

@@ -1,0 +1,36 @@
+#!/usr/local/bin/dyalogscript
+⍝ Manual/demo script for exercising Fff against a large, real tree —
+⍝ deliberately NOT one of the committed automated tests (those target
+⍝ this repo, small and portable; see test/06-fff-cover.apls). Edit
+⍝ TARGET_DIR below to point at your own large codebase before running.
+⍝ fff-mcp works against a non-git directory too, just slower to index
+⍝ on a cold process the first time.
+⎕IO←1
+
+TARGET_DIR←'C:\path\to\your\large\codebase' ⍝ <-- edit this
+
+⎕FIX'file://D:/devel/mcp-client/src/Shell.dyalog'
+⎕FIX'file://D:/devel/mcp-client/src/JsonRpc.dyalog'
+⎕FIX'file://D:/devel/mcp-client/src/Mcp.dyalog'
+⎕FIX'file://D:/devel/mcp-client/src/Fff.dyalog'
+
+opts←(Timeout:120) ⍝ first-index latency on a large/cold tree can be slow
+
+h←opts Fff.Connect TARGET_DIR
+⎕←'Connected to ',h.Exe
+⎕←'Searching ',h.Path
+
+t←⎕AI[3]
+r←h Fff.Find'main'
+⎕←(⍕≢r.Paths),' of ',(⍕r.Total),' files matched ''main'' (',(⍕⎕AI[3]-t),' ms)'
+:For p :In 5↑r.Paths ⋄ ⎕←' ',p ⋄ :EndFor
+
+t←⎕AI[3]
+r←h Fff.Grep'TODO'
+⎕←(⍕r.Shown),' of ',(⍕r.Total),' matches for ''TODO'' across ',(⍕≢r.Files),' files (',(⍕⎕AI[3]-t),' ms)'
+:For f :In 5↑r.Files
+    ⎕←' ',f.Path,' (',(⍕≢f.Matches),' matches)'
+:EndFor
+
+Fff.Disconnect h
+⎕OFF

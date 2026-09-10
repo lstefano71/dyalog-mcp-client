@@ -1,8 +1,20 @@
 # Plan — Dyalog APL MCP Client
 
-**Status**: All three phases (`Shell`, `JsonRpc`, `Mcp`) done and verified
-against real `fff-mcp.exe` — see `src/*.dyalog` and `test/01-*.apls`..
-`05-*.apls`. v1 scope (ADR D8) is complete; see `TODO.md` for what's next.
+**Status**: All four phases (`Shell`, `JsonRpc`, `Mcp`, `Fff`) done and
+verified against real `fff-mcp.exe` (including a real ~94k-file, non-git
+tree — see `examples/fff-search-large-tree.apls`) — see `src/*.dyalog` and
+`test/01-*.apls`..`06-*.apls`. v1 scope (ADR D8) is complete; see
+`TODO.md` for what's next.
+
+## Phase 4 — `Fff`: a high-level cover for fff-mcp specifically
+
+Built on top of `Mcp`, specific to the fff-mcp server (tested against
+v0.10.6): `Fff.Connect`/`Disconnect` keep one instance alive against a
+directory; `Fff.Find`/`Grep`/`MultiGrep` wrap `find_files`/`grep`/
+`multi_grep`; a best-effort, explicitly version-specific parser turns
+fff-mcp's plain-text `content` into structured fields (paths/counts for
+`find_files`; per-file → per-line matches for `grep`/`multi_grep`), always
+keeping the raw text alongside. See ADR D11 and TODO.md.
 
 Goal: an MCP client, written in and for Dyalog APL, that talks to stdio-based
 MCP servers via `⎕SHELL`. Built bottom-up in three phases, each independently

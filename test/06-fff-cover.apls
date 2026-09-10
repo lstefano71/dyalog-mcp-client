@@ -1,0 +1,37 @@
+#!/usr/local/bin/dyalogscript
+⎕IO←1
+⎕FIX'file://D:/devel/mcp-client/src/Shell.dyalog'
+⎕FIX'file://D:/devel/mcp-client/src/JsonRpc.dyalog'
+⎕FIX'file://D:/devel/mcp-client/src/Mcp.dyalog'
+⎕FIX'file://D:/devel/mcp-client/src/Fff.dyalog'
+
+h←Fff.Connect'D:\devel\mcp-client'
+⎕←'connected, exe=',h.Exe
+
+r1←h Fff.Find'Shell'
+⎕←'find shown=',(⍕r1.Shown),' total=',(⍕r1.Total),' paths=',(⍕≢r1.Paths)
+⎕←' first path: ',⊃r1.Paths
+
+r2←h Fff.Grep('Namespace'(maxResults:5))
+⎕←'grep shown=',(⍕r2.Shown),' total=',(⍕r2.Total),' files=',(⍕≢r2.Files)
+:If 0≠≢r2.Files
+    f←⊃r2.Files
+    ⎕←' first file: ',f.Path,' (',(⍕≢f.Matches),' matches)'
+    :If 0≠≢f.Matches
+        m←⊃f.Matches
+        ⎕←'  line ',(⍕m.LineNum),': ',m.Text
+    :EndIf
+:EndIf
+
+r3←h Fff.MultiGrep(('Namespace' 'Connect')(maxResults:5))
+⎕←'multi_grep shown=',(⍕r3.Shown),' total=',(⍕r3.Total),' files=',(⍕≢r3.Files)
+
+⍝ A query with zero hits must still parse cleanly — no header, no
+⍝ files, no crash. Reversed so the literal word never appears in
+⍝ source (this file included), or it would match itself.
+r4←h Fff.Grep⌽'zzz_reifitnedi_hcus_on_zzz'
+⎕←'no-hit grep shown=',(⍕r4.Shown),' total=',(⍕r4.Total),' files=',(⍕≢r4.Files),' text=[',r4.Text,']'
+
+Fff.Disconnect h
+⎕←'status after disconnect=',h.Mcp.JsonRpc.Shell.Status
+⎕OFF
