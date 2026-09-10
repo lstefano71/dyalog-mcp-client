@@ -14,6 +14,16 @@
 
     ⎕IO←1 ⋄ ⎕ML←1
 
+    ∇ n←_ToInt digits
+      ⍝ digits: a character vector already confirmed to hold only
+      ⍝ '0123456789' (every call site here pre-filters with that exact
+      ⍝ digit set before slicing — never a '-', so ⎕VFI's high-minus
+      ⍝ requirement for negatives never applies). ⎕VFI, not ⍎ — this
+      ⍝ text comes from the server, and ⍎ on unvalidated input is a
+      ⍝ code-injection risk even when the caller believes it's clean.
+      n←2⊃⎕VFI digits
+    ∇
+
     ∇ exe←_DefaultExe
       ⍝ ⎕NQ'.' 'GetEnvironment' returned empty for every variable tried
       ⍝ under dyalogscript (see ADR D11) — read it via a trivial child
@@ -111,16 +121,15 @@
       shown←0 ⋄ total←0
       n1←+/∧\header∊digits
       :If n1>0
-          shown←⍎n1↑header
+          shown←_ToInt n1↑header
           total←shown
           rest←n1↓header
-          :If 0≠≢rest ⍝ ∧ isn't short-circuiting — see _ParseMatchLine
-              :If '/'=1⊃rest
-                  rest←1↓rest
-                  n2←+/∧\rest∊digits
-                  :If n2>0 ⋄ total←⍎n2↑rest ⋄ :EndIf
-              :EndIf
-          :EndIf
+      :AndIf 0≠≢rest
+      :AndIf '/'=1⊃rest
+          rest←1↓rest
+          n2←+/∧\rest∊digits
+      :AndIf n2>0
+          total←_ToInt n2↑rest
       :EndIf
     ∇
 
@@ -138,20 +147,20 @@
       nd←+/∧\t∊digits
       :If (nd>0)∧(nd<≢t)
           sep←(nd+1)⊃t
-          :If sep∊':|-'
-              :Select sep
-              :Case ':' ⋄ kind←'Match'
-              :Case '|' ⋄ kind←'DefContext'
-              :Case '-' ⋄ kind←'Context'
-              :EndSelect
-              num←⍎nd↑t
-              text←(nd+1)↓t
-              ⍝ ∧ isn't short-circuiting in APL — 1⊃text on an empty
-              ⍝ text would INDEX ERROR if these were combined in one :If.
-              :If 0≠≢text
-                  :If ' '=1⊃text ⋄ text←1↓text ⋄ :EndIf
-              :EndIf
-          :EndIf
+      :AndIf sep∊':|-'
+          :Select sep
+          :Case ':' ⋄ kind←'Match'
+          :Case '|' ⋄ kind←'DefContext'
+          :Case '-' ⋄ kind←'Context'
+          :EndSelect
+          num←_ToInt nd↑t
+          text←(nd+1)↓t
+          ⍝ ∧ isn't short-circuiting in APL — 1⊃text on an empty text
+          ⍝ would INDEX ERROR if these were combined into one :If with
+          ⍝ ∧; :AndIf short-circuits properly instead.
+      :AndIf 0≠≢text
+      :AndIf ' '=1⊃text
+          text←1↓text
       :EndIf
     ∇
 
@@ -167,7 +176,8 @@
           seg←(¯1+⊃hits)↑text
           :While (0≠≢seg)∧(' '=¯1↑seg) ⋄ seg←¯1↓seg ⋄ :EndWhile
           nd←+/∧\digits∊⍨⌽seg
-          :If nd>0 ⋄ n←⍎¯nd↑seg ⋄ :EndIf
+      :AndIf nd>0
+          n←_ToInt ¯nd↑seg
       :EndIf
     ∇
 

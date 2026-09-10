@@ -1,0 +1,34 @@
+#!/usr/local/bin/dyalogscript
+⍝ JsonRpcCl (Content-Length-framed JSON-RPC, ADR D13) against the toy
+⍝ CL server — the committed, network-free test. See
+⍝ scratch-equivalent manual verification against a real LSP server
+⍝ (pyright-langserver via npx) mentioned in the ADR; not committed
+⍝ here since it needs network access and an npm install on first run.
+⎕IO←1
+⎕FIX'file://D:/devel/mcp-client/src/JsonRpcCl.dyalog'
+
+h←JsonRpcCl.Connect'python' 'D:\devel\mcp-client\examples\toy-jsonrpc-cl-server.py'
+
+r1←h JsonRpcCl.Call('echo'(text:'hello'))
+⎕←'echo -> ',r1.result
+
+r2←h JsonRpcCl.Call('add'(a:3 ⋄ b:4))
+⎕←'add -> ',⍕r2.result
+
+⍝ Unknown method must come back as an ordinary JSON-RPC error
+⍝ response, same contract as JsonRpc (ADR D6).
+r3←h JsonRpcCl.Call'not/a/real/method'
+⎕←'unknown method -> has error field: ',⍕0≠⎕NC'r3.error'
+
+⍝ Receive timeout, same contract as JsonRpc/Shell.
+h.Timeout←2
+:Trap 999
+    h JsonRpcCl.Call('sleep'(seconds:5))
+    ⎕←'FAIL: expected timeout'
+:Else
+    ⎕←'sleep timeout signaled ok: ',⎕DM
+:EndTrap
+
+JsonRpcCl.Disconnect h
+⎕←'status after disconnect=',h.Status
+⎕OFF

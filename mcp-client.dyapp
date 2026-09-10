@@ -3,3 +3,4 @@ Load src\Shell.dyalog
 Load src\JsonRpc.dyalog
 Load src\Mcp.dyalog
 Load src\Fff.dyalog
+Load src\JsonRpcCl.dyalog

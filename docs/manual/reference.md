@@ -1,8 +1,8 @@
 # Reference
 
-Every public verb, across all four layers, with its signature and a
-working example. Scoped to public verbs only — no leading-underscore
-internals (those would go in a future Internals Guide; see `TODO.md`).
+Every public verb, across all layers, with its signature and a working
+example. Scoped to public verbs only — no leading-underscore internals
+(those would go in a future Internals Guide; see `TODO.md`).
 
 See [`CONTEXT.md`](../../CONTEXT.md) for the vocabulary used here
 (**Handle**, **Layer**, **Cover**), and
@@ -16,8 +16,8 @@ script (cited by path) or was written fresh and actually run once
 before being included here (per the Manual's own doc standard) — none
 of this is speculative.
 
-All four layers require Dyalog APL 20.0+ (for `⎕SHELL`, `⎕TALLOC`, and
-array notation).
+All layers require Dyalog APL 20.0+ (for `⎕SHELL`, `⎕TALLOC`, and array
+notation).
 
 ---
 
@@ -339,3 +339,71 @@ r3←h Fff.MultiGrep(('Namespace' 'Connect')(maxResults:5))
 ⎕←'multi_grep shown=',(⍕r3.Shown),' total=',(⍕r3.Total),' files=',(⍕≢r3.Files)
 ```
 (`test/06-fff-cover.apls`)
+
+---
+
+## `JsonRpcCl` — JSON-RPC 2.0 over Content-Length framing
+
+A second, self-contained JSON-RPC layer, independent of `Shell` —
+speaks the Content-Length-header framing LSP/DAP and most other stdio
+JSON-RPC servers use (as opposed to `JsonRpc`'s newline-delimited
+framing, which MCP uses). Same verb shape as `JsonRpc`
+(`Connect`/`Disconnect`/`Call`/`Notify`), same v1 scope (one in-flight
+`Call` per handle — ADR D7's reasoning applies here too), same
+error-handling split (ADR D6: a JSON-RPC error response is ordinary
+data; transport/protocol faults signal). Source: `src/JsonRpcCl.dyalog`.
+
+**Handle fields**: `Cmd`, `WorkingDir`, `Buffer` (partially-received
+data, not yet a complete message), `Messages` (queue of complete
+messages received but not yet consumed), `Status`, `ExitCode`,
+`ExitReason`, `Pid`, `NextId`, `Timeout` (default `10`),
+`Notifications`.
+
+### `h←{opts}Connect cmd`
+
+```apl
+h←JsonRpcCl.Connect'python' 'D:\devel\mcp-client\examples\toy-jsonrpc-cl-server.py'
+```
+(`test/08-jsonrpccl-toy-server.apls`)
+
+### `{r}←Disconnect h`
+
+```apl
+JsonRpcCl.Disconnect h
+```
+(`test/08-jsonrpccl-toy-server.apls`)
+
+### `resp←h Call args`
+
+Same `args` shape and semantics as `JsonRpc.Call`.
+
+```apl
+r1←h JsonRpcCl.Call('echo'(text:'hello'))
+⎕←'echo -> ',r1.result
+
+r2←h JsonRpcCl.Call('add'(a:3 ⋄ b:4))
+⎕←'add -> ',⍕r2.result
+
+⍝ Unknown method -> ordinary JSON-RPC error response, not a signal.
+r3←h JsonRpcCl.Call'not/a/real/method'
+⎕←'unknown method -> has error field: ',⍕0≠⎕NC'r3.error'
+```
+(`test/08-jsonrpccl-toy-server.apls`)
+
+A timeout signals, same as `JsonRpc`/`Shell`:
+
+```apl
+h.Timeout←2
+:Trap 999
+    h JsonRpcCl.Call('sleep'(seconds:5))
+    ⎕←'FAIL: expected timeout'
+:Else
+    ⎕←'sleep timeout signaled ok: ',⎕DM
+:EndTrap
+```
+(`test/08-jsonrpccl-toy-server.apls`)
+
+### `{r}←h Notify args`
+
+Same `args` shape as `Call`; sends a notification (no id), doesn't
+wait for a response. See `JsonRpc.Notify` — identical semantics.

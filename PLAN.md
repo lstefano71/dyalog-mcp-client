@@ -3,8 +3,20 @@
 **Status**: All four phases (`Shell`, `JsonRpc`, `Mcp`, `Fff`) done and
 verified against real `fff-mcp.exe` (including a real ~94k-file, non-git
 tree — see `examples/fff-search-large-tree.apls`) — see `src/*.dyalog` and
-`test/01-*.apls`..`06-*.apls`. v1 scope (ADR D8) is complete; see
-`TODO.md` for what's next.
+`test/01-*.apls`..`08-*.apls`. v1 scope (ADR D8) is complete; see
+`TODO.md` for what's next. A fifth piece, `JsonRpcCl`, adds a second
+transport (Content-Length framing) alongside the original four phases'
+newline-delimited one — see below.
+
+## Phase 5 — `JsonRpcCl`: Content-Length framing, for non-MCP servers
+
+A second, self-contained JSON-RPC layer (same verb shape as `JsonRpc`:
+`Connect`/`Disconnect`/`Call`/`Notify`) speaking Content-Length-header
+framing — the framing LSP/DAP and most other stdio JSON-RPC servers
+use, as opposed to MCP's newline-delimited one. Verified against a toy
+Content-Length server (`test/08-jsonrpccl-toy-server.apls`) and,
+manually, against a real language server (`pyright-langserver`). See
+ADR D13. No cover is built on top of it yet — see `TODO.md`.
 
 ## Phase 4 — `Fff`: a high-level cover for fff-mcp specifically
 

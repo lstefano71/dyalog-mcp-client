@@ -234,8 +234,14 @@ mind everywhere, not just here:
   `INDEX ERROR`s. (Monadic `⊃`/`↑` on an empty array are fine —
   `⊃`/`↑` never index, they disclose/pad with a fill element — it's
   specifically an explicit dyadic pick like `1⊃`/`¯1⊃` that needs the
-  length check to actually *precede* it, in a separate `:If`, not
-  merely appear alongside it in one `∧`.)
+  length check to actually *precede* it.) `:If`'s `:AndIf`/`:OrIf`
+  clauses genuinely short-circuit (the later condition isn't evaluated
+  at all when the earlier one already decides the branch) and read
+  better than nesting a separate `:If` inside the first — that's what
+  the code does now, e.g. `:If 0≠≢text ⋄ :AndIf ' '=1⊃text`. (Don't mix
+  `:AndIf` and `:OrIf` in the same chain, and avoid code between an
+  `:If`/`:AndIf` and the next `:AndIf` where it can be helped — both
+  are legal but read about as unclearly as nested `:If`s once you do.)
 - **A multi-character left argument to `≡¨`/`∊` compares
   element-by-element, not as one unit** — `'Match'≡¨kinds` pairs each
   of `'Match'`'s own 5 characters against `kinds` (a `LENGTH ERROR`
@@ -318,3 +324,87 @@ Further implementation notes discovered while building it:
   needed. (An initial version used a `'FindFiles'`/`'Grep'` selector
   string with `:Select` instead, before noticing operators were the
   actual tool for the job.)
+
+### D13. `JsonRpcCl`: a second, self-contained JSON-RPC layer for Content-Length framing
+
+`Shell`/`JsonRpc` assume newline-delimited JSON-RPC framing throughout
+(ADR D5) — correct for MCP, but genuinely unusual in the wider stdio
+JSON-RPC world, where Content-Length-header framing (LSP, DAP, and
+most other stdio JSON-RPC servers) dominates (see the Manual's
+Tutorial, and the TODO.md entry this ADR resolves). `JsonRpcCl` adds
+that framing as a **separate, self-contained namespace** — deliberately
+*not* built on `Shell`, because `Shell`'s line-splitting `Output`
+callback mode is the wrong tool for a transport where a message body
+is read by exact byte count, not by scanning for newlines. `JsonRpcCl`
+talks to `⎕SHELL` directly, in *simple vector mode* (see below), and
+does its own header/body buffering. Its public verb shape
+(`Connect`/`Disconnect`/`Call`/`Notify`) deliberately matches
+`JsonRpc`'s, so a future cover could be built on either the same way
+`Mcp` is built on `JsonRpc`.
+
+Verified two ways: a purpose-built toy Content-Length server
+(`examples/toy-jsonrpc-cl-server.py`, the twin of the NDJSON toy server
+— `test/08-jsonrpccl-toy-server.apls` is the committed, network-free
+test), and manually against a real, substantial language server,
+`pyright-langserver` (installed ad hoc via `npx -y -p pyright
+pyright-langserver --stdio` — note the `-p` flag: `pyright-langserver`
+is a bin *inside* the `pyright` npm package, not a package of its own,
+so a bare `npx -y pyright-langserver` 404s). The real-server run
+completed a full `initialize` handshake, correctly interleaving
+unsolicited `window/logMessage` notifications with the awaited
+response — not committed as an automated test since it needs network
+access and an npm install on first run, unlike everything else in this
+repo.
+
+Implementation notes from building and debugging it — several are
+general APL gotchas, not specific to this transport:
+
+- **`Output ('Callback' fn type)` with a scalar-integer `type`** (here,
+  `80` — the same value the docs note is what `('Array' Data)`'s
+  shorthand means for character data) puts the callback in *simple
+  vector mode*: raw accumulated text, no line splitting. This is
+  exactly what a byte-counted framing needs, and — as a bonus — an
+  `Input ('Token' n)` fed the same way (`('Array' Data 80)`, not
+  `('Array' Data Encoding)`) sends the data as-is, with **no forced
+  trailing newline** (unlike `Shell.Send`'s `('Array' text 'UTF-8')`,
+  where the auto-appended newline is desirable for NDJSON but would be
+  one stray extra byte here).
+- **Two simple-vector-mode (`type`-based) `Output` callbacks together,
+  combined with an `Input ('Token' …)`, reliably raise `DOMAIN ERROR:
+  Invalid use of variant`** against a real interactive child process —
+  a distinct `⎕SHELL` variant-combination limitation from `Shell`'s
+  `Output ('Null')`-plus-token one (ADR D11), but the same *family* of
+  issue. The fix is the same shape: give the discarded stream (2) an
+  *ordinary line-mode* callback instead (no explicit `type`), keeping
+  simple-vector mode only where it's actually needed (stream 1).
+- **`bodyStart-1+len` does not mean `(bodyStart-1)+len`** — APL
+  evaluates strictly right-to-left with no operator precedence, so
+  that expression is `bodyStart-(1+len)`, silently wrong (and, since it
+  can come out negative, an "already have enough bytes" length check
+  built on it can be *always* false, masking the bug as a downstream
+  JSON-parse failure instead of the arithmetic error it actually is).
+  Parenthesize; don't rely on reading intent into bare `+`/`-` chains.
+- **`N↓X` where `N` is a *count*, not an index** — `bodyStart↓h.Buffer`
+  drops `bodyStart` elements, landing one *past* the position named
+  `bodyStart`; extracting a slice starting *at* index `bodyStart` needs
+  `(bodyStart-1)↓h.Buffer`.
+- **A single-character split idiom (`sep(≠⊆⊢)text`) cannot split on a
+  multi-character delimiter** (`"\r\n"`) — `≠` would try to compare a
+  2-element left argument against `text` elementwise. Strip the `\r`
+  first (as `Fff`'s CRLF-tolerance already does) and split on the
+  remaining `\n` alone; reserve `⍷` (which does handle multi-character
+  needles correctly) for finding the 4-character `"\r\n\r\n"` header/body
+  boundary itself.
+- **`'content-length:'` is 15 characters, not 16** — worth calling out
+  only because miscounting it silently produces a *shape* mismatch
+  (`≡` between a 16-element slice and a 15-element literal is just
+  `0`, no error at all), not a loud one — this is the same class of
+  silent-wrongness as the arithmetic precedence gotcha above, not a
+  new lesson, but a second data point for it.
+- **Never use `⍎` to parse numbers out of untrusted (server-supplied)
+  text**, even text already filtered down to plain digits by the
+  caller — `⍎` executes arbitrary APL, and relying on an upstream
+  filter's correctness to make that safe is fragile. `⎕VFI` is the
+  actual tool for "turn this digit string into a number" and never
+  executes anything. (This applies equally to the digit-parsing added
+  for `Fff` in D12, fixed alongside this.)

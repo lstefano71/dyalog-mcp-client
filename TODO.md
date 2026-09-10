@@ -7,19 +7,23 @@ from.
 
 ## Transport
 
-- **A Content-Length-framed transport, alongside `Shell`'s newline-
-  delimited one**: `Shell`/`JsonRpc` currently assume NDJSON framing
-  (ADR D5) — correct for MCP, but that's actually the *unusual* choice
-  in the wider stdio-JSON-RPC world; Content-Length-header framing
-  (LSP, DAP, and most other stdio JSON-RPC servers) is far more common.
-  A sibling transport layer (e.g. `ShellLsp`, or a framing option on
-  `Shell` itself) would open this client up to language servers and
-  similar tools, not just MCP-family servers. Not needed for anything
-  in scope today — recorded here because the idea came up while
-  researching what else `JsonRpc` could plausibly talk to (see the
-  Manual's Tutorial, which uses a purpose-built NDJSON toy server
-  instead, precisely because no well-known *non*-MCP stdio server
-  actually uses this client's framing).
+- ~~A Content-Length-framed transport~~ — done: `JsonRpcCl` (ADR D13).
+  Still open on top of it:
+  - **No cover built on it yet** — `JsonRpcCl` was verified directly
+    (a toy server, and manually against real `pyright-langserver`),
+    but nothing like `Mcp`/`Fff` exists on top of it. A minimal LSP
+    cover (`initialize`/`textDocument/didOpen`/`textDocument/hover`,
+    say) would be the natural next step if there's ever a reason to
+    actually use a language server from this client, not just prove
+    the transport talks to one.
+  - **Same gaps `JsonRpc` has, largely un-re-litigated**: single
+    in-flight `Call` only (ADR D7's reasoning applies equally here),
+    no `Stop`/`Disconnect` force-kill fallback (same as the `Shell.Stop`
+    TODO below), batch requests not implemented.
+  - **The real-LSP verification isn't a committed automated test** —
+    it needs network access and an npm install (`npx -y -p pyright
+    pyright-langserver --stdio`) on first run, unlike everything else
+    in this repo. Worth reconsidering if this project ever gets CI.
 
 ## Shell layer
 

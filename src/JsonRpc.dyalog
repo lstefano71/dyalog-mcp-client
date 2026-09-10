@@ -72,7 +72,14 @@
           :Else
               ('JsonRpc: malformed JSON from server: ',line)⎕SIGNAL 999
           :EndTrap
-          :If (0≠⎕NC'parsed.id')∧(parsed.id≡id)
+          ⍝ ∧ isn't short-circuiting — parsed.id on a notification (no
+          ⍝ id field at all) would VALUE ERROR if this were one :If
+          ⍝ with ∧ instead of :AndIf. Latent until a server actually
+          ⍝ sends an unsolicited notification — fff-mcp never does
+          ⍝ (see ADR D7), so this went unnoticed until JsonRpcCl's
+          ⍝ near-identical logic hit it against a real LSP server.
+          :If 0≠⎕NC'parsed.id'
+          :AndIf parsed.id≡id
               resp←parsed
               :Return
           :Else

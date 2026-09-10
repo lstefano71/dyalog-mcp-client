@@ -1,12 +1,17 @@
 # mcp-client (Dyalog APL)
 
-An MCP client written in and for Dyalog APL, built in four layers over
+An MCP client written in and for Dyalog APL, built in layers over
 `⎕SHELL`: a bidirectional stdio process wrapper (`Shell`), a minimal
-JSON-RPC 2.0 layer (`JsonRpc`), MCP protocol semantics (`Mcp`), and a
-high-level cover for one particular server (`Fff`, for
-[`fff-mcp`](https://github.com/dmtrKovalenko/fff)). Targets stdio-based
-MCP servers generally — `Fff` is the exception, deliberately specific
-to one server; see [`CONTEXT.md`](CONTEXT.md) for that distinction.
+JSON-RPC 2.0 layer over newline-delimited framing (`JsonRpc`), MCP
+protocol semantics (`Mcp`), and a high-level cover for one particular
+server (`Fff`, for [`fff-mcp`](https://github.com/dmtrKovalenko/fff)).
+A second, self-contained JSON-RPC layer, `JsonRpcCl`, speaks
+Content-Length-header framing instead — the framing LSP/DAP and most
+other stdio JSON-RPC servers use, verified against a real language
+server (`pyright-langserver`) as well as MCP-family ones. `Fff` is the
+one deliberately server-specific piece — everything else targets
+stdio-based JSON-RPC/MCP servers generally; see
+[`CONTEXT.md`](CONTEXT.md) for that Layer/Cover distinction.
 
 - **[docs/manual/](docs/manual/)** — the user manual: a
   [Reference](docs/manual/reference.md) (every public verb, every
@@ -30,7 +35,9 @@ dyalog +s mcp-client.dyapp
 ```
 
 Or `⎕FIX` the files under `src/` directly, in order (`Shell`,
-`JsonRpc`, `Mcp`, `Fff`) — see the Tutorial's bootstrap step.
+`JsonRpc`, `Mcp`, `Fff`, `JsonRpcCl`) — see the Tutorial's bootstrap
+step. `JsonRpcCl` is independent of the other four (it doesn't build on
+`Shell`) and can be `⎕FIX`ed on its own.
 
 ## Testing
 
