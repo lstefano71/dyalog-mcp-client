@@ -408,3 +408,141 @@ general APL gotchas, not specific to this transport:
   actual tool for "turn this digit string into a number" and never
   executes anything. (This applies equally to the digit-parsing added
   for `Fff` in D12, fixed alongside this.)
+
+### D15. `Fff` parser: closing the remaining fff-source-confirmed gaps
+
+Phase 9 (see `PLAN.md`/`TODO.md`) closed the four items D12/TODO.md
+had left open, re-verified against the current `D:\devel\fff` checkout
+(`crates/fff-mcp/src/{server,output}.rs`) rather than trusting D12's
+line-range citations blindly — they had moved somewhat, so every shape
+below was re-confirmed directly.
+
+**Auto-broadened queries** (`server.rs`' `perform_grep`): when the
+exact query gets 0 matches and is multi-word, fff-mcp retries with the
+first word dropped (skipped if that word looks like a constraint —
+starts with `!`/`*` or ends with `/`). If the retry finds 1-10
+matches, the response is `"0 matches for '<q>'. Auto-broadened to
+'<q2>':\n{text}"`, where `{text}` is a **normal, mode-formatted**
+`GrepFormatter::format` result for the retry — `output_mode` is
+whatever was originally requested, not always `'content'`. This means
+the embedded text can itself contain a `→ Read` suggestion line, a
+`"N/Total matches shown"` header, or (for `'files_with_matches'`/
+`'count'` modes) their own mode-specific shapes. `_ParseGrep` now
+strips just the leading `"0 matches for '<q>'. Auto-broadened to
+'<q2>':"` line, records `<q2>` as `Broadened`, and falls through to
+parse the remaining lines exactly as if they were the whole response
+(same `mode` — no separate code path needed). Decision: `Broadened`
+defaults to `''` (empty means "no broadening happened"), matching the
+existing `Suggestion`/`Cursor` convention of "empty string means
+absent" rather than a separate Boolean flag field.
+
+**Path-only fallback** (`server.rs`, same function, later branch):
+reached only when the exact query, the auto-broaden retry, *and* a
+fuzzy content-similarity retry all come up empty, and the query
+contains `/` and scores well against fff's filename fuzzy matcher.
+Text is `"0 content matches. But there is a relevant file path:
+{path}"` — always exactly this one line, mode-independent (built
+directly in `server.rs`, never routed through `GrepFormatter`, so it's
+identical no matter what `output_mode` was requested). `<p>` now lands
+in a new `SuggestedPath` field (`''` when absent, same convention).
+
+**The fuzzy-approximate fallback is also mode-independent**: the `"0
+exact matches. N approximate:\n{...}"` text a few lines above the
+path-only fallback in `server.rs` is likewise built directly (not
+through `GrepFormatter`), and always uses the *default/content* line
+shape (`" N: text"`) regardless of the requested `output_mode`. So is
+the bare `"0 matches."` (both empty-result branches in `perform_grep`
+use this exact string). `_ParseGrep` checks for these two shapes
+*before* branching on `mode`, so a `'count'`/`'files_with_matches'`
+request that happens to fall into one of these fallbacks still parses
+correctly instead of being fed to the wrong per-line parser.
+
+**`output_mode` variants** (`output.rs`' `GrepFormatter::format`):
+confirmed `OutputMode::Usage` and `OutputMode::Content` are the same
+code path (the `_ => Self::Content` catch-all in `OutputMode::new`
+means an unset/unrecognized `output_mode` and an explicit `"usage"`
+produce identical text) — no separate handling needed beyond the
+existing default parser. `FilesWithMatches` and `Count` are genuinely
+different text shapes, each with its own formatting function
+(`format_files_with_matches`/`format_count`) that **never** produces
+the `"N/Total matches"` header the default mode does — `Shown`/`Total`
+are defined instead as the file count (`'files_with_matches'`) or the
+sum of per-file counts (`'count'`), the closest each mode's own text
+actually carries. `'files_with_matches'` is confirmed the only mode
+whose path line can carry a trailing `" [def]"` tag (and, for large
+files, a `"({N}KB - use offset to read relevant section)"` size tag) —
+both are stripped out into a new `IsDef` field per `Files` entry
+rather than left riding along in `Path`. `'count'` produces one
+`"{path}: {count}"` line per file with no header and no per-line
+detail at all — modeled as a new `Counts` field (vector of
+`(Path Count)`), left empty when the mode isn't `'count'`; `Files`
+stays empty when it is. Decision: rather than varying `Fff.Grep`'s
+result *shape* by mode (which would make every caller `:Select` on
+`output_mode` before touching the result), it keeps one consistent
+field set (`Shown`/`Total`/`Cursor`/`Suggestion`/`Broadened`/
+`SuggestedPath`/`Files`/`Counts`) across all modes, with the
+mode-inapplicable fields simply empty — same "always present, may be
+empty" convention `Raw`/`Text`/`Suggestion`/`Cursor` already
+established. `output_mode` is threaded through as a left argument to
+a now-dyadic `_ParseGrep` (`mode _ParseGrep text`, defaulting to
+`'content'` when omitted monadically, so the existing direct
+`Fff._ParseGrep sample` call in `test/07` keeps working unchanged);
+`Fff.Grep`/`MultiGrep` bind it via `mode∘_ParseGrep` (Dyalog 18+'s
+bind form of `∘`, mentioned in D12) before handing it to `_WithParsed`
+as the parser operand.
+
+**Multi-file/pagination-scale grouping**: re-ran the existing
+file-changes-when-path-line-seen grouping logic (unchanged from D12)
+against real heavy output — `context:4`/`context:5` grep queries with
+many hits across several files, both in this repo and, by hand,
+against the much larger `D:\devel\fff` source tree (a `multi_grep`
+there returned 11 files, up to 13 matches in one, 67 total match+
+context lines in one page; a plain `grep 'fn '` with `context:5`
+returned exactly 60 Context-kind entries for 6 Match-kind entries — 6
+matches × (5 before + 5 after) = 60, confirming context-line counting
+is exact even at this scale). No grouping corruption found — the
+logic holds up under real pagination load, not just the small,
+few-file cases it had only been exercised against before. Cursor
+pagination itself (multiple pages via the returned `Cursor`) was also
+exercised this way and round-tripped correctly.
+
+**Two more real, previously-latent bugs surfaced by actually exercising
+these paths for the first time** (not introduced by this phase's
+changes — both pre-existing, just never triggered before):
+
+- `_ToInt` (`n←2⊃⎕VFI digits`) returns a **1-element vector**, not a
+  true scalar — `⍴` on the result is `1`, not `⍬`. This was invisible
+  everywhere it had been used before (it prints and does arithmetic
+  identically to a scalar as long as nothing gathers several of them
+  across an array of namespace refs via dot notation). The new
+  `Counts` field's `Path`/`Count` per-file entries are exactly that:
+  `r.Counts.Count` (dot notation over several refs, per D12's own
+  "distributes like `¨`" note) wraps each non-scalar `Count` leaf in
+  its own enclosure to build the combined array, so the result comes
+  out **nested** (`≡` reports depth 2, not the expected 1) even though
+  its shape and printed value look perfectly ordinary. That nesting
+  then propagated through ordinary-looking arithmetic/comparisons
+  (`r.Shown≠+/r.Counts.Count`, `∨` combining that with other
+  conditions) into a `:If` condition that was no longer a simple
+  Boolean, which Dyalog rejects with `DOMAIN ERROR: Boolean singleton
+  value required` — a genuinely confusing error to debug backward
+  from, since every intermediate value *displays* and *shapes* like an
+  ordinary scalar; only `≡` (depth) exposes the nesting. Fixed by
+  disclosing: `n←⊃2⊃⎕VFI digits`. General lesson: when a `:If`
+  condition DOMAIN ERRORs with "Boolean singleton value required" on
+  what looks like an ordinary scalar comparison, check `≡` on the
+  operands, not just `⍴` — a nested (nesting depth > 1) simple-looking
+  scalar is invisible to `⍴`/`⍕`/direct display alike.
+- `_NumberBefore` used `n←_ToInt ¯nd↑seg` — `¯` (high minus) is valid
+  **only as part of a numeric literal** (`¯1`, `¯nd` is not one token,
+  it's `¯` followed by the variable `nd`, which is a `SYNTAX ERROR`);
+  negating a variable to build a left argument for `↑` needs monadic
+  `-`, i.e. `(-nd)↑seg`. This line implements grep's `"0 exact
+  matches. N approximate:"` fuzzy-fallback count, a shape that had
+  apparently never actually been hit by any test or example run
+  against this repo before Phase 9's queries were the first to
+  reliably trigger it (a query with no exact hits but a strong fuzzy
+  match). Fixed alongside the `output_mode`/broadening work; a good
+  reminder that "the code has never errored" is not the same claim as
+  "the code has been exercised" — a `:Trap`-swallowed or simply
+  never-reached branch can carry a `SYNTAX ERROR` indefinitely.

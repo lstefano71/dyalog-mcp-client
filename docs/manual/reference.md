@@ -232,9 +232,9 @@ result←h Mcp.CallTool('find_files'(query:'Mcp'))
 
 Unlike the three layers above, `Fff` only makes sense for one server:
 fff-mcp (tested against v0.10.6). It hardcodes its tool names and
-parses its particular text output — see ADR D11 and `TODO.md` for the
-text-format variants the parser doesn't yet handle. Source:
-`src/Fff.dyalog`.
+parses its particular text output — see ADR D11/D12/D15 for how that
+parser was ground-truthed against fff's own source, and `TODO.md` for
+what's still open. Source: `src/Fff.dyalog`.
 
 **Handle fields** (in addition to the `Mcp` handle it wraps, at
 `h.Mcp`): `Path` (directory searched), `Exe` (fff-mcp.exe path used).
@@ -293,15 +293,41 @@ this repo before being included here)
 ### `result←h Grep args`
 
 `args` is a query (character vector) or a `(query opts)` pair — `opts`
-may set `cursor`/`maxResults`/`context`/`output_mode` (`output_mode`
-values besides the default aren't parsed yet — see `TODO.md`). Wraps
-`grep`. Result fields: `Shown`, `Total`, `Cursor`, `Suggestion`,
-`Files` (vector of `(Path Matches)` namespaces, each `Matches` a
-vector of `(LineNum Text Kind)` namespaces — `Kind` is `'Match'`
-(a real hit, `" N: text"`), `'Context'` (an explicit `context:N` line,
-`" N-text"`), or `'DefContext'` (fff auto-expanding a definition's
-body, `"  N| text"` — this can appear even without `context` set,
-whenever a hit is itself a definition).
+may set `cursor`/`maxResults`/`context`/`output_mode`. Wraps `grep`.
+Result fields, always present regardless of `output_mode` (mode-
+specific ones are simply empty when they don't apply — see ADR D15):
+
+- `Shown`, `Total` — for the default mode, the "N/Total matches"
+  header (or a count of real matches when there's no header to read).
+  For `'files_with_matches'`, the number of files (this mode's text
+  never carries a header). For `'count'`, the sum of the per-file
+  counts.
+- `Cursor` — non-empty when there's another page.
+- `Suggestion` — the `→ Read ...` hint line, if present.
+- `Broadened` — non-empty (naming the broadened query) when fff-mcp's
+  own multi-word auto-retry kicked in (`"0 matches for '<q>'.
+  Auto-broadened to '<q2>':"`, emitted when the exact query gets 0
+  hits) — `Shown`/`Total`/`Files`/`Counts` describe the broadened
+  query's real results in that case, not the always-0 exact-match
+  count.
+- `SuggestedPath` — non-empty when grep found no content match at all
+  but a plausibly-related file path (`"0 content matches. But there
+  is a relevant file path: <p>"`); `Shown`/`Total` are `0` and
+  `Files`/`Counts` are empty in that case.
+- `Files` — populated for the default (`'content'`, i.e. `'usage'`)
+  and `'files_with_matches'` modes; empty for `'count'`. A vector of
+  `(Path Matches)` namespaces (`'files_with_matches'` entries also
+  carry `IsDef`, a Boolean — that mode is the only one where a path
+  line can genuinely carry a `[def]` tag). Each `Matches` is a vector
+  of `(LineNum Text Kind)` namespaces — `Kind` is `'Match'` (a real
+  hit, `" N: text"`, or, in `'files_with_matches'`, a `"  N: text"`
+  preview line), `'Context'` (an explicit `context:N` line,
+  `" N-text"`), or `'DefContext'` (fff auto-expanding a definition's
+  body, `"  N| text"` — this can appear even without `context` set,
+  whenever a hit is itself a definition).
+- `Counts` — populated only for `'count'` mode: a vector of
+  `(Path Count)` namespaces, one per file, no per-line `Matches` at
+  all (that mode's text never carries individual lines).
 
 ```apl
 r2←h Fff.Grep('Namespace'(maxResults:5))
@@ -327,6 +353,26 @@ r4←h Fff.Grep⌽'zzz_reifitnedi_hcus_on_zzz' ⍝ reversed so the literal
 ⎕←'no-hit grep shown=',(⍕r4.Shown),' total=',(⍕r4.Total),' files=',(⍕≢r4.Files),' text=[',r4.Text,']'
 ```
 (`test/06-fff-cover.apls`)
+
+`output_mode` picks which of `Files`/`Counts` gets populated:
+
+```apl
+r5←h Fff.Grep('Namespace'(maxResults:5 ⋄ output_mode:'files_with_matches'))
+⎕←'files_with_matches: shown=',(⍕r5.Shown),' files=',⍕≢r5.Files
+:If 0≠≢r5.Files
+    f←⊃r5.Files
+    ⎕←' first file: ',f.Path,' isDef=',⍕f.IsDef
+:EndIf
+
+r6←h Fff.Grep('Namespace'(maxResults:5 ⋄ output_mode:'count'))
+⎕←'count: shown=',(⍕r6.Shown),' counts=',⍕≢r6.Counts
+:If 0≠≢r6.Counts
+    c←⊃r6.Counts
+    ⎕←' first count: ',c.Path,' = ',⍕c.Count
+:EndIf
+```
+(adapted from `test/10-fff-parser-extended.apls`; run once against
+`fff-mcp.exe` in this repo before being included here)
 
 ### `result←h MultiGrep args`
 

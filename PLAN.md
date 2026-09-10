@@ -6,7 +6,45 @@ tree — see `examples/fff-search-large-tree.apls`) — see `src/*.dyalog` and
 `test/01-*.apls`..`08-*.apls`. v1 scope (ADR D8) is complete; see
 `TODO.md` for what's next. A fifth piece, `JsonRpcCl`, adds a second
 transport (Content-Length framing) alongside the original four phases'
-newline-delimited one — see below.
+newline-delimited one — see below. Phase 9 closed out the four
+previously-open `Fff` parser gaps (auto-broadened queries, the
+path-only fallback, `output_mode` variants, and pagination-scale
+grouping) — see below and ADR D15.
+
+## Phase 9 — `Fff`: closing the remaining parser gaps
+
+Ground-truthed, again, against the fff source (`D:\devel\fff`) — see
+ADR D15. Closes all four "Still open" items TODO.md's Fff cover layer
+section had left from Phase 4/ADR D12:
+
+- **Auto-broadened queries**: `_ParseGrep` now recognizes `"0 matches
+  for '<q>'. Auto-broadened to '<q2>':"`, strips it, and parses the
+  rest of the text (which server.rs formats with the *original*
+  `output_mode`) exactly as a normal response — `Shown`/`Total`/
+  `Files`/`Counts` reflect the broadened result's real counts, and a
+  new `Broadened` field carries `<q2>`.
+- **Path-only fallback**: `"0 content matches. But there is a
+  relevant file path: <p>"` now lands in a new `SuggestedPath` field
+  instead of being dropped.
+- **`output_mode` variants**: `'files_with_matches'` and `'count'` are
+  now parsed (`_ParseFilesWithMatches`/`_ParseCountLines`), dispatched
+  from `Fff.Grep`/`MultiGrep` reading `output_mode` out of `opts`.
+  `Files` gains an `IsDef` field for `'files_with_matches'`; a new
+  `Counts` field (vector of `(Path Count)`) is populated only for
+  `'count'` mode.
+- **Pagination-scale grouping**: re-verified the file-changes-when-
+  path-line-seen grouping logic against real multi-file, large-
+  `context` output (both this repo and, by hand, the much larger
+  `D:\devel\fff` tree) — no corruption found.
+
+Also fixed two more real, previously-latent bugs this surfaced (see
+ADR D15): `_ToInt` returned a 1-element vector from `⎕VFI` rather than
+a true scalar (invisible until gathered across several namespace refs
+via dot notation, which is exactly what the new `Counts.Count` field
+does), and `_NumberBefore` used the syntactically-invalid `¯nd↑seg`
+(negating a variable with `¯`, not `-`) — never exercised until this
+phase's tests were the first to genuinely trigger grep's fuzzy
+"N approximate:" fallback text. See `test/10-fff-parser-extended.apls`.
 
 ## Phase 5 — `JsonRpcCl`: Content-Length framing, for non-MCP servers
 

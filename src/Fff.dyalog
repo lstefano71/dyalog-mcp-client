@@ -21,7 +21,18 @@
       ⍝ requirement for negatives never applies). ⎕VFI, not ⍎ — this
       ⍝ text comes from the server, and ⍎ on unvalidated input is a
       ⍝ code-injection risk even when the caller believes it's clean.
-      n←2⊃⎕VFI digits
+      ⍝ ⎕VFI's second result is a 1-element VECTOR, not a true scalar
+      ⍝ (⍴ shows 1, not ⍬) — ⊃ discloses it down to a genuine scalar.
+      ⍝ Never visibly wrong before (it prints and does arithmetic
+      ⍝ exactly like a scalar as long as nothing gathers several of
+      ⍝ them across an array of namespace refs via dot notation) —
+      ⍝ surfaced only once _ParseCountLines' Counts.Count did exactly
+      ⍝ that: dot-distribution over several refs wraps each non-scalar
+      ⍝ leaf in its own enclosure to build the combined array, and the
+      ⍝ resulting nested (mixed) value made a later :If's condition
+      ⍝ come out nested instead of a plain boolean, DOMAIN ERRORing
+      ⍝ with "Boolean singleton value required". See ADR D15.
+      n←⊃2⊃⎕VFI digits
     ∇
 
     ∇ exe←_DefaultExe
@@ -67,11 +78,14 @@
     ∇ result←h Grep args
       ⍝ args: a query (char vector), or a (query opts) pair — opts
       ⍝ may set cursor/maxResults/context/output_mode, per grep's
-      ⍝ inputSchema.
+      ⍝ inputSchema. output_mode drives which _ParseGrep shape is
+      ⍝ attempted (see ADR D15) — 'content' (the default, and also
+      ⍝ what fff-mcp calls 'usage') if unset.
       (query opts)←_SplitArgs args
       arguments←⎕NS(query:query)opts
+      mode←opts ⎕VGET⊂'output_mode' 'content'
       raw←h.Mcp #.Mcp.CallTool('grep' arguments)
-      result←(_ParseGrep _WithParsed)raw
+      result←((mode∘_ParseGrep) _WithParsed)raw
     ∇
 
     ∇ result←h MultiGrep args
@@ -80,8 +94,9 @@
       ⍝ output_mode, per multi_grep's inputSchema.
       (patterns opts)←_SplitArgs args
       arguments←⎕NS(patterns:patterns)opts
+      mode←opts ⎕VGET⊂'output_mode' 'content'
       raw←h.Mcp #.Mcp.CallTool('multi_grep' arguments)
-      result←(_ParseGrep _WithParsed)raw ⍝ same per-file/per-line shape as grep
+      result←((mode∘_ParseGrep) _WithParsed)raw ⍝ same per-file/per-line shape as grep
     ∇
 
     ∇ (primary opts)←_SplitArgs args
@@ -177,7 +192,12 @@
           :While (0≠≢seg)∧(' '=¯1↑seg) ⋄ seg←¯1↓seg ⋄ :EndWhile
           nd←+/∧\digits∊⍨⌽seg
       :AndIf nd>0
-          n←_ToInt ¯nd↑seg
+          ⍝ ¯ is only valid as part of a numeric literal (¯1), not as
+          ⍝ negation of a variable — ¯nd↑seg is a SYNTAX ERROR; the
+          ⍝ actual negate-a-variable idiom is monadic -, (-nd)↑seg.
+          ⍝ Never hit until this parser's "approximate" fallback path
+          ⍝ was actually exercised against a real response — see ADR D15.
+          n←_ToInt(-nd)↑seg
       :EndIf
     ∇
 
@@ -216,34 +236,84 @@
       parsed←(Shown:shown ⋄ Total:total ⋄ Cursor:cursor ⋄ Suggestion:suggestion ⋄ Paths:lines)
     ∇
 
-    ∇ parsed←_ParseGrep text
-      ⍝ "{→ Read <path> (only match|[def]|(best match))\n}
-      ⍝  {N/Total matches shown\n}
-      ⍝  <path>\n <num>: <line>\n <num>-<context line>\n
-      ⍝   <num>| <definition context line>\n...\n{\ncursor: <token>}"
-      ⍝ Ground-truthed against fff's output.rs. Two header shapes are
-      ⍝ recognized but only degrade gracefully, not fully parsed —
-      ⍝ still yields Files correctly, Shown/Total stay 0 (see TODO.md):
-      ⍝   "0 matches for '<q>'. Auto-broadened to '<q2>':" (results for
-      ⍝   the broadened query follow, on subsequent lines)
-      ⍝   "0 content matches. But there is a relevant file path: <p>"
-      ⍝   (a bare suggestion, no Files at all)
-      nl←⎕UCS 10
-      text←(text≠⎕UCS 13)/text ⍝ tolerate \r\n as well as bare \n
-      lines←nl(≠⊆⊢)text
-      ⍝ Unlike find_files, grep/multi_grep's cursor line is preceded
-      ⍝ by a blank line (harmless: the per-file loop below skips blank
-      ⍝ lines anyway) rather than following directly.
-      cursor←''
-      :If (0≠≢lines)∧(8≤≢⊃¯1↑lines)∧('cursor: '≡8↑⊃¯1↑lines)
-          cursor←8↓⊃¯1↑lines
-          lines←¯1↓lines
+    ∇ q←_BroadenedTo line
+      ⍝ "0 matches for '<q>'. Auto-broadened to '<q2>':" -> q2, or ''
+      ⍝ when line isn't this shape (ground-truthed against server.rs'
+      ⍝ perform_grep: the retry text is appended right after the
+      ⍝ closing "':" with no space). qc is a single-quote character,
+      ⍝ built via ⎕UCS rather than APL's doubled-quote literal escape
+      ⍝ so the marker text reads plainly.
+      qc←⎕UCS 39
+      q←''
+      prefix←'0 matches for ',qc
+      marker←qc,'. Auto-broadened to ',qc
+      :If prefix≡(≢prefix)↑line
+          hits←⍸marker⍷line
+      :AndIf 0≠≢hits
+          rest←(((⊃hits)-1)+≢marker)↓line
+          closer←qc,':'
+      :AndIf closer≡¯2↑rest
+          q←¯2↓rest
       :EndIf
-      suggestion←''
-      :If (0≠≢lines)∧(2≤≢⊃lines)∧('→ '≡2↑⊃lines)
-          suggestion←⊃lines
-          lines←1↓lines
+    ∇
+
+    ∇ p←_SuggestedPathFrom line
+      ⍝ "0 content matches. But there is a relevant file path: <p>" ->
+      ⍝ p, or '' when line isn't this shape.
+      prefix←'0 content matches. But there is a relevant file path: '
+      p←''
+      :If prefix≡(≢prefix)↑line
+          p←(≢prefix)↓line
       :EndIf
+    ∇
+
+    ∇ (path isDef)←_StripDefTag line
+      ⍝ files_with_matches path lines may carry a trailing " [def]"
+      ⍝ tag and/or a large-file size tag ("... (NNKB - use offset to
+      ⍝ read relevant section)") — ground-truthed against output.rs'
+      ⍝ format_files_with_matches/size_tag. Strip both, returning the
+      ⍝ bare path and whether [def] was present.
+      path←line ⋄ isDef←0
+      sizeMarker←'KB - use offset to read relevant section)'
+      hits←⍸sizeMarker⍷path
+      :If 0≠≢hits
+          openHits←⍸' ('⍷(¯1+⊃hits)↑path
+          :If 0≠≢openHits
+              path←(¯1+⊃¯1↑openHits)↑path
+          :EndIf
+      :EndIf
+      defTag←' [def]'
+      :If (≢defTag)≤≢path
+      :AndIf defTag≡(-≢defTag)↑path
+          isDef←1
+          path←(-≢defTag)↓path
+      :EndIf
+    ∇
+
+    ∇ (path num ok)←_ParseCountLine line
+      ⍝ "{path}: {count}" (output.rs' format_count) -> path count 1,
+      ⍝ or '' 0 0 when line doesn't end in ": <digits>".
+      digits←'0123456789'
+      path←'' ⋄ num←0 ⋄ ok←0
+      sep←': '
+      hits←⍸sep⍷line
+      :If 0≠≢hits
+          idx←⊃¯1↑hits
+          rest←((idx-1)+≢sep)↓line
+      :AndIf (0≠≢rest)∧(∧/rest∊digits)
+          path←(idx-1)↑line
+          num←_ToInt rest
+          ok←1
+      :EndIf
+    ∇
+
+    ∇ (shown total files)←_ParseGrepContentLines lines
+      ⍝ The default ('content'/'usage') per-line shape, and also the
+      ⍝ shape of every mode-independent fallback text (see
+      ⍝ _ParseGrep) regardless of the output_mode actually requested —
+      ⍝ ground-truthed against output.rs' GrepFormatter::format and
+      ⍝ server.rs' fuzzy-fallback text builder, both of which always
+      ⍝ emit this shape.
       shown←0 ⋄ total←0 ⋄ files←⍬
       hadHeader←0
       :If 0≠≢lines
@@ -280,7 +350,125 @@
           n←+/'Match'∘≡¨(∊files.Matches).Kind
           shown←total←n
       :EndIf
-      parsed←(Shown:shown ⋄ Total:total ⋄ Cursor:cursor ⋄ Suggestion:suggestion ⋄ Files:files)
+    ∇
+
+    ∇ (shown total files)←_ParseFilesWithMatches lines
+      ⍝ output_mode:'files_with_matches' (output.rs'
+      ⍝ format_files_with_matches): never has a "N/Total matches"
+      ⍝ header (Shown/Total default to the file count instead), but
+      ⍝ path lines can carry a genuine "[def]" tag — unlike every
+      ⍝ other mode. Preview ("  N: text") and def-expansion
+      ⍝ ("  N| text") lines reuse _ParseMatchLine unchanged: it
+      ⍝ strips all leading spaces before counting digits, so the
+      ⍝ extra indentation here classifies the same as content mode's
+      ⍝ Match/DefContext lines.
+      files←⍬
+      curPath←'' ⋄ curIsDef←0 ⋄ curMatches←⍬
+      :For ln :In lines
+          :If (0=≢ln)∨(ln≡'--') ⋄ :Continue ⋄ :EndIf
+          (kind num mtext)←_ParseMatchLine ln
+          :If 0≠≢kind
+              curMatches,←⊂(LineNum:num ⋄ Text:mtext ⋄ Kind:kind)
+          :Else
+              :If 0≠≢curPath ⋄ files,←⊂(Path:curPath ⋄ IsDef:curIsDef ⋄ Matches:curMatches) ⋄ :EndIf
+              (curPath curIsDef)←_StripDefTag ln
+              curMatches←⍬
+          :EndIf
+      :EndFor
+      :If 0≠≢curPath ⋄ files,←⊂(Path:curPath ⋄ IsDef:curIsDef ⋄ Matches:curMatches) ⋄ :EndIf
+      shown←total←≢files
+    ∇
+
+    ∇ (shown total counts)←_ParseCountLines lines
+      ⍝ output_mode:'count' (output.rs' format_count): one
+      ⍝ "{path}: {count}" line per file, no header at all. Total is
+      ⍝ the sum of the per-file counts (the closest analogue to
+      ⍝ "total matches" this mode's text actually carries).
+      counts←⍬ ⋄ total←0
+      :For ln :In lines
+          :If 0=≢ln ⋄ :Continue ⋄ :EndIf
+          (path num ok)←_ParseCountLine ln
+          :If ok
+              counts,←⊂(Path:path ⋄ Count:num)
+              total←total+num
+          :EndIf
+      :EndFor
+      shown←total
+    ∇
+
+    ∇ parsed←{mode}_ParseGrep text
+      ⍝ mode ('content' default | 'files_with_matches' | 'count' —
+      ⍝ matches grep/multi_grep's output_mode; 'usage', per output.rs,
+      ⍝ is textually identical to 'content'/the default, so it needs
+      ⍝ no separate handling). See ADR D15 for the full shape catalog.
+      ⍝
+      ⍝ "{→ Read <path> (only match|[def]|(best match))\n}
+      ⍝  {N/Total matches shown\n}
+      ⍝  <path>\n <num>: <line>\n <num>-<context line>\n
+      ⍝   <num>| <definition context line>\n...\n{\ncursor: <token>}"
+      ⍝ (default mode) — or files_with_matches'/count's own per-file
+      ⍝ shapes (_ParseFilesWithMatches/_ParseCountLines). A handful of
+      ⍝ header/fallback shapes are emitted the *same way regardless of
+      ⍝ output_mode* (ground-truthed against server.rs' perform_grep,
+      ⍝ which builds them directly rather than through GrepFormatter)
+      ⍝ and are recognized before any mode-specific dispatch:
+      ⍝   "0 matches for '<q>'. Auto-broadened to '<q2>':" then, on
+      ⍝   the same text, a normal *mode-formatted* grep result for the
+      ⍝   broadened query (server.rs re-invokes GrepFormatter with the
+      ⍝   original output_mode for the retry) — Broadened is set to
+      ⍝   <q2> and the remaining lines are parsed exactly as if they
+      ⍝   were the whole response.
+      ⍝   "0 content matches. But there is a relevant file path: <p>"
+      ⍝   -> SuggestedPath, no Files/Counts at all.
+      ⍝   "0 matches." / "0 exact matches. N approximate:" -> always
+      ⍝   this content-style shape, whatever output_mode was asked
+      ⍝   for (server.rs builds this text directly, not through
+      ⍝   GrepFormatter, so it never varies with output_mode).
+      :If 0=⎕NC'mode' ⋄ mode←'content' ⋄ :EndIf
+      nl←⎕UCS 10
+      text←(text≠⎕UCS 13)/text ⍝ tolerate \r\n as well as bare \n
+      lines←nl(≠⊆⊢)text
+      ⍝ Unlike find_files, grep/multi_grep's cursor line is preceded
+      ⍝ by a blank line (harmless: the per-file loop below skips blank
+      ⍝ lines anyway) rather than following directly.
+      cursor←''
+      :If (0≠≢lines)∧(8≤≢⊃¯1↑lines)∧('cursor: '≡8↑⊃¯1↑lines)
+          cursor←8↓⊃¯1↑lines
+          lines←¯1↓lines
+      :EndIf
+      broadened←''
+      :If 0≠≢lines
+          broadened←_BroadenedTo⊃lines
+      :AndIf 0≠≢broadened
+          lines←1↓lines ⍝ what remains is a normal, mode-formatted result
+      :EndIf
+      :If (1=≢lines)∧(0≠≢_SuggestedPathFrom⊃lines)
+          parsed←(Shown:0 ⋄ Total:0 ⋄ Cursor:cursor ⋄ Suggestion:'' ⋄ Broadened:broadened ⋄ SuggestedPath:_SuggestedPathFrom⊃lines ⋄ Files:⍬ ⋄ Counts:⍬)
+          :Return
+      :EndIf
+      suggestion←''
+      :If (0≠≢lines)∧(2≤≢⊃lines)∧('→ '≡2↑⊃lines)
+          suggestion←⊃lines
+          lines←1↓lines
+      :EndIf
+      :If (1=≢lines)∧('0 matches.'≡⊃lines)
+          parsed←(Shown:0 ⋄ Total:0 ⋄ Cursor:cursor ⋄ Suggestion:suggestion ⋄ Broadened:broadened ⋄ SuggestedPath:'' ⋄ Files:⍬ ⋄ Counts:⍬)
+          :Return
+      :EndIf
+      counts←⍬
+      :If (0≠≢lines)∧(∨/'approximate'⍷⊃lines)
+          ⍝ The fuzzy-fallback text is content-style regardless of
+          ⍝ what output_mode was requested — see the function header.
+          (shown total files)←_ParseGrepContentLines lines
+      :ElseIf mode≡'files_with_matches'
+          (shown total files)←_ParseFilesWithMatches lines
+      :ElseIf mode≡'count'
+          files←⍬
+          (shown total counts)←_ParseCountLines lines
+      :Else
+          (shown total files)←_ParseGrepContentLines lines
+      :EndIf
+      parsed←(Shown:shown ⋄ Total:total ⋄ Cursor:cursor ⋄ Suggestion:suggestion ⋄ Broadened:broadened ⋄ SuggestedPath:'' ⋄ Files:files ⋄ Counts:counts)
     ∇
 
 :EndNamespace

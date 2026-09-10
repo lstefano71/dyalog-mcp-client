@@ -74,25 +74,56 @@ point on. `Matches` entries now carry a `Kind` (`'Match'`|`'Context'`|
 `'DefContext'`) rather than being assumed all real matches — see
 `docs/manual/reference.md`.
 
+All four previously-open items below are now done (Phase 9, ADR D15):
+- ~~`"0 matches for '<q>'. Auto-broadened to '<q2>':"`~~ — done.
+  `Shown`/`Total`/`Files`/`Counts` now reflect the broadened result's
+  real counts (server.rs re-invokes `GrepFormatter` with the
+  *original* `output_mode` for the retry, so the embedded text is
+  parsed exactly as if it were the whole response), and a new
+  `Broadened` field carries the query it broadened to (empty when no
+  broadening happened).
+- ~~`"0 content matches. But there is a relevant file path: <p>"`~~ —
+  done. `<p>` is extracted into a new `SuggestedPath` field.
+- ~~`output_mode` values other than the default~~ — done.
+  `'files_with_matches'` and `'count'` are now parsed
+  (`_ParseFilesWithMatches`/`_ParseCountLines`); `Fff.Grep`/
+  `MultiGrep` read `output_mode` from `opts` and dispatch accordingly.
+  `Files` gains an `IsDef` field for `'files_with_matches'` (the only
+  mode with a genuine per-file `[def]` tag); a new `Counts` field
+  (vector of `(Path Count)`) is populated only for `'count'` mode. A
+  handful of fallback text shapes (`"0 matches."`, the fuzzy
+  `"N approximate:"` text, and the auto-broadened header above) are
+  mode-independent in the source itself and are recognized before any
+  mode-specific dispatch, regardless of the requested `output_mode`.
+- ~~Multi-file blocks under real pagination load~~ — done. Re-verified
+  against a `context:4`/`context:5` grep with many hits across
+  multiple files, both in this repo and by hand against the much
+  larger `D:\devel\fff` source tree (11+ files, 60+ matches in one
+  page) — no grouping corruption found. See `test/10-fff-parser-
+  extended.apls`.
+
+Also surfaced and fixed while doing this pass (see ADR D15):
+- `_ToInt` returned a 1-element *vector* from `⎕VFI`, not a true
+  scalar — invisible until `Counts.Count`, gathered via dot notation
+  across several namespace refs, became the first field to expose it:
+  the nested result made a later `:If` DOMAIN ERROR ("Boolean
+  singleton value required"). Fixed by disclosing (`⊃`) the `⎕VFI`
+  result.
+- `_NumberBefore` used `¯nd↑seg` — `¯` is only valid as part of a
+  numeric literal, not as negation of a variable; this is a
+  `SYNTAX ERROR`, and it had never actually been exercised until this
+  pass's tests genuinely triggered grep's "0 exact matches. N
+  approximate:" fuzzy-fallback text for the first time. Fixed to
+  `(-nd)↑seg`.
+
 Still open:
-- **`"0 matches for '<q>'. Auto-broadened to '<q2>':"`** (grep retries
-  a multi-word query with the first word dropped when the exact query
-  gets 0 hits) — the broadened results that follow parse fine as
-  `Files`, but `Shown`/`Total` stay `0` (read off the leading, always-0
-  count in that header) rather than reflecting the broadened count.
-- **`"0 content matches. But there is a relevant file path: <p>"`**
-  (grep's path-only fallback) — parses to an empty result; the
-  suggested path itself isn't extracted into a structured field.
-- **`output_mode` values other than the default (`'content'`, which
-  the source shows is actually identical to `'usage'`)** —
-  `'files_with_matches'` and `'count'` produce structurally different
-  text (confirmed in `output.rs`: e.g. `'files_with_matches'` is the
-  *only* mode with a genuine per-file `[def]` tag) that `_ParseGrep`
-  doesn't attempt to read at all.
-- **Multi-file blocks under real pagination load** (many files, a
-  `context` far larger than tested) — the file-changes-when-path-line-
-  seen grouping logic is confirmed correct in principle from the
-  source, but only exercised here against small, few-file results.
+- **`Broadened`/`SuggestedPath`/`output_mode`'s size-tag stripping are
+  best-effort text matching**, same spirit as the rest of this parser
+  (D11/D12) — e.g. `_StripDefTag`'s large-file size-tag stripping
+  assumes the exact `output.rs` wording (`"NNKB - use offset to read
+  relevant section)"`) and would silently leave it in `Path` if that
+  wording ever changes upstream. Not a known bug, just the same
+  version-specific fragility every other shape here already has.
 
 ## MCP layer
 
