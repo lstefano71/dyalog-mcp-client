@@ -45,3 +45,7 @@ indexes slower cold on a large non-git tree):
 
 See `examples/` for a large-tree demo script and the toy JSON-RPC
 server used in the Tutorial.
+
+## License
+
+[Unlicense](LICENSE) — public domain.
