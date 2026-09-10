@@ -1,0 +1,34 @@
+#!/usr/local/bin/dyalogscript
+⎕IO←1
+⎕FIX'file://D:/devel/mcp-client/src/Shell.dyalog'
+
+exe←'C:\Users\stf\AppData\Local\fff-mcp\bin\fff-mcp.exe'
+opts←⎕NS''
+opts.WorkingDir←'D:\devel\mcp-client'
+
+h←opts Shell.Start,⊂exe
+⎕←'started, Tid=',⍕h.Tid
+
+req←(jsonrpc:'2.0' ⋄ id:1 ⋄ method:'initialize' ⋄ params:(
+  protocolVersion:'2025-06-18'
+  ⋄ capabilities:()
+  ⋄ clientInfo:(name:'dyalog-mcp-client' ⋄ version:'0.1.0')
+))
+
+line←⎕JSON req
+⎕←'>> ',line
+h Shell.Send line
+
+:Trap 0
+    resp←10 Shell.Receive h
+    ⎕←'<< ',resp
+    parsed←⎕JSON resp
+    ⎕←'parsed ok:'
+    ⎕←parsed
+:Else
+    ⎕←'ERROR: ',⎕DM
+:EndTrap
+
+Shell.Stop h
+⎕←'done'
+⎕OFF

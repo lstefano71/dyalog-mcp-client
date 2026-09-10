@@ -1,0 +1,34 @@
+#!/usr/local/bin/dyalogscript
+⎕IO←1
+⎕FIX'file://D:/devel/mcp-client/src/Shell.dyalog'
+
+exe←'C:\Users\stf\AppData\Local\fff-mcp\bin\fff-mcp.exe'
+opts←⎕NS''
+opts.WorkingDir←'D:\devel\mcp-client'
+h←opts Shell.Start,⊂exe
+
+req1←(jsonrpc:'2.0' ⋄ id:1 ⋄ method:'initialize' ⋄ params:(
+  protocolVersion:'2025-06-18' ⋄ capabilities:() ⋄ clientInfo:(name:'x' ⋄ version:'0')
+))
+h Shell.Send ⎕JSON req1
+r1←⎕JSON 10 Shell.Receive h
+⎕←'init ok: ',r1.result.serverInfo.name
+
+h Shell.Send ⎕JSON(jsonrpc:'2.0' ⋄ method:'notifications/initialized')
+
+req2←(jsonrpc:'2.0' ⋄ id:2 ⋄ method:'tools/list')
+h Shell.Send ⎕JSON req2
+r2←⎕JSON 10 Shell.Receive h
+⎕←'tools: ',⍕r2.result.tools.name
+
+req3←(jsonrpc:'2.0' ⋄ id:3 ⋄ method:'tools/call' ⋄ params:(
+  name:'find_files' ⋄ arguments:(query:'Shell')
+))
+h Shell.Send ⎕JSON req3
+r3←⎕JSON 10 Shell.Receive h
+⎕←'call ok, isError=',⍕r3.result.isError
+
+⎕←'status before stop=',h.Status
+Shell.Stop h
+⎕←'status after stop=',h.Status
+⎕OFF

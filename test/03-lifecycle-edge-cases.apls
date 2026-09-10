@@ -1,0 +1,31 @@
+#!/usr/local/bin/dyalogscript
+⎕IO←1
+⎕FIX'file://D:/devel/mcp-client/src/Shell.dyalog'
+
+exe←'C:\Users\stf\AppData\Local\fff-mcp\bin\fff-mcp.exe'
+opts←⎕NS''
+opts.WorkingDir←'D:\devel\mcp-client'
+h←opts Shell.Start,⊂exe
+
+⍝ Receive timeout path: nothing was sent, so this must time out and signal.
+:Trap 999
+    2 Shell.Receive h
+    ⎕←'FAIL: expected a timeout signal'
+:Else
+    ⎕←'timeout signaled ok: ',⎕DM
+:EndTrap
+
+Shell.Stop h
+⎕←'status after first stop=',h.Status
+Shell.Stop h ⍝ must be safe to call twice
+⎕←'status after second stop=',h.Status
+
+⍝ Send after stop must signal, not hang or corrupt state.
+:Trap 999
+    h Shell.Send '{}'
+    ⎕←'FAIL: expected a not-running signal'
+:Else
+    ⎕←'send-after-stop signaled ok: ',⎕DM
+:EndTrap
+
+⎕OFF
