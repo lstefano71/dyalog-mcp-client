@@ -408,3 +408,85 @@ general APL gotchas, not specific to this transport:
   actual tool for "turn this digit string into a number" and never
   executes anything. (This applies equally to the digit-parsing added
   for `Fff` in D12, fixed alongside this.)
+
+### D16. `Lsp`: a minimal LSP cover over `JsonRpcCl`
+
+`JsonRpcCl` (D13) proved the Content-Length transport talks to a real
+language server, but left the actual LSP protocol semantics — the
+handshake shape, hover, clean shutdown — for a cover to build, the
+same way `Mcp` builds MCP semantics on top of `JsonRpc`. `Lsp` is that
+cover: `Connect`/`Disconnect` (handshake + clean shutdown),
+`DidOpen`/`Hover` (`textDocument/didOpen`/`textDocument/hover`).
+Deliberately general-purpose, not server-specific (unlike `Fff`) —
+nothing in it is pyright-only, it's just the only server it's been
+verified against. v1 scope is narrow, same spirit as `Mcp`'s (D8) —
+see `TODO.md` for what's out (`didChange`/`didClose`, `completion`,
+`definition`, `references`, published diagnostics, workspace folders).
+
+Verified against real `pyright-langserver` (`npx -y -p pyright
+pyright-langserver --stdio`, the same invocation D13 used) —
+`test/09-lsp-cover.apls`: `initialize`/`initialized` handshake,
+`ServerCapabilities` populated, `textDocument/didOpen` on a real
+`.py` fixture followed by `textDocument/hover` over a stdlib call
+(`os.getcwd()`) returning real hover content (`"(function) def
+getcwd() -> str"`), hover over a blank line returning JSON `null`,
+`shutdown`/`exit` followed by `Disconnect` actually ending the process
+(`Status` reads `'Exited'` afterward).
+
+Empirically-derived specifics, not obvious from the spec text alone
+without a real server to check against:
+
+- **LSP's `initialized` is a notification named exactly
+  `'initialized'`, with an *empty params object*, not MCP's
+  `notifications/initialized`-shaped name and not "no params at
+  all."** Skipping it doesn't error outright — pyright's `initialize`
+  response comes back fine either way — but requests sent afterward
+  (`textDocument/hover` included) got no useful response without it
+  having been sent first. This is easy to get wrong by analogy with
+  MCP's very similarly-purposed step, which really is what its own
+  name plus no-params-needed suggests.
+- **Minimal `initialize` params are enough**: `processId:⊂'null'`,
+  `rootUri:⊂'null'` (both JSON `null`, no workspace — same convention
+  as D13/D11's `⊂'null'`-on-the-way-out), `capabilities:()` (a bare
+  empty object). pyright answered with real `ServerCapabilities` and
+  gave real hover content off nothing more elaborate than that — no
+  need was found for declaring specific client capabilities (e.g.
+  `textDocument.hover.contentFormat`) just to get a working `hover`
+  reply (it came back as `contents.kind:'plaintext'`, pyright's own
+  default, without asking for anything). `TODO.md` notes this may not
+  generalize to every server.
+- **JSON `null` coming *in* is `⊂'null'`, not an absent field, not
+  `⎕NULL`, not `0`/`⍬`.** This wasn't previously documented anywhere
+  in this codebase — D11 established `⎕JSON` represents `true`/`false`
+  coming in as `⊂'true'`/`⊂'false'`, but `Hover`'s "no info at this
+  position" result (a spec-legal `null`) is the first place this
+  codebase actually received a `null` value and needed to branch on
+  it, and confirmed empirically that the same enclosed-text
+  convention extends to `null` too: `(h Lsp.Hover args)≡⊂'null'`, not
+  `0=⎕NC` or any check for a missing `.contents`. Get this wrong and a
+  legitimate "nothing to say" response looks like a malformed one.
+- **`textDocument/didOpen`'s `text` is genuinely authoritative
+  regardless of what's on disk at `uri`**, exactly as the spec says —
+  confirmed by opening a `uri` naming a path with **no file on disk at
+  all** and still getting a correct hover result off `text` alone.
+  The committed test/Tutorial example still open a real file (for a
+  realistic worked example a reader could open in an editor), but
+  nothing in `Lsp.DidOpen` requires `uri` to resolve to a real path.
+- **`shutdown` then `exit` is enough to make pyright's own process
+  exit on its own** — `Disconnect`'s subsequent
+  `JsonRpcCl.Disconnect` (stdin-close/wait) mostly just observes an
+  already-finished exit rather than causing one, but is kept
+  unconditionally (wrapped in `:Trap` around the `shutdown`/`exit`
+  pair) in case a future target server doesn't honor `exit` — falling
+  through to the same force-nothing wait `JsonRpcCl.Disconnect`
+  already does for every other case.
+- **The isError-vs-signal judgment call, applied to LSP**: LSP has no
+  literal `isError` field the way MCP tool results do, but the same
+  underlying distinction (D6/D11) applies — a JSON-RPC-level `error`
+  response (bad params, method not found, a request sent before
+  `initialize` completes) means something about the *protocol
+  exchange* went wrong and signals; a `result` that is legitimately
+  `null` per the LSP spec (hover/definition/etc. all document `null`
+  as a valid "nothing found here" result) is the server successfully
+  telling the caller there's nothing to report, which is ordinary
+  data, not a fault. `Lsp.Hover` implements exactly this split.

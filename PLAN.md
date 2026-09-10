@@ -6,7 +6,22 @@ tree — see `examples/fff-search-large-tree.apls`) — see `src/*.dyalog` and
 `test/01-*.apls`..`08-*.apls`. v1 scope (ADR D8) is complete; see
 `TODO.md` for what's next. A fifth piece, `JsonRpcCl`, adds a second
 transport (Content-Length framing) alongside the original four phases'
-newline-delimited one — see below.
+newline-delimited one — see below. A tenth piece, `Lsp`, is a minimal
+cover on top of `JsonRpcCl`, verified against real `pyright-langserver`
+— see Phase 10 below.
+
+## Phase 10 — `Lsp`: a minimal LSP cover over `JsonRpcCl`
+
+Built on top of `JsonRpcCl`, general-purpose in the same sense `Mcp` is
+(not tied to one particular language server, unlike `Fff`):
+`Lsp.Connect`/`Disconnect` perform the `initialize`/`initialized`
+handshake and `shutdown`/`exit`; `Lsp.DidOpen`/`Hover` wrap
+`textDocument/didOpen`/`textDocument/hover`. Verified against real
+`pyright-langserver` (`test/09-lsp-cover.apls`) — connect, open a real
+file, hover over a stdlib call and get back real hover content, hover
+over a blank line and get back JSON `null` as ordinary data (not a
+signal). See ADR D16 and `TODO.md` for what's deliberately out of
+scope (everything else LSP defines beyond this narrow slice).
 
 ## Phase 5 — `JsonRpcCl`: Content-Length framing, for non-MCP servers
 

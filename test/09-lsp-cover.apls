@@ -1,0 +1,41 @@
+#!/usr/local/bin/dyalogscript
+⍝ Lsp (LSP semantics over JsonRpcCl, ADR D16) against a real language
+⍝ server, pyright-langserver — installed ad hoc via `npx -y -p pyright
+⍝ pyright-langserver --stdio` (see the Tutorial's Step 5/6 and ADR
+⍝ D13/D16 for why `-p pyright` matters). Needs network access and an
+⍝ npm install on first run, same caveat as JsonRpcCl's own manual
+⍝ real-server verification — not run in a hypothetical CI without
+⍝ network access.
+⎕IO←1
+⎕FIX'file://D:/devel/mcp-client/src/JsonRpcCl.dyalog'
+⎕FIX'file://D:/devel/mcp-client/src/Lsp.dyalog'
+
+opts←(Timeout:90)
+h←opts Lsp.Connect'cmd.exe' '/C' 'npx' '-y' '-p' 'pyright' 'pyright-langserver' '--stdio'
+⎕←'connected, capabilities: ',⍕h.ServerCapabilities.⎕NL ¯2
+
+fixture←'D:\devel\mcp-client\examples\hover-fixture.py'
+tie←fixture ⎕NTIE 0
+text←⎕NREAD tie 82(⎕NSIZE tie)
+⎕NUNTIE tie
+slashed←fixture ⋄ slashed[⍸slashed='\']←'/'
+uri←'file:///',slashed
+
+h Lsp.DidOpen(uri text 'python')
+⎕←'didopen sent'
+
+⍝ 'os.getcwd()' is on line 3 (1-based in the file, 0-based on the
+⍝ wire — LSP positions are always 0-based, unrelated to ⎕IO); hover
+⍝ over 'getcwd' (character 3, 0-based, inside the word).
+r←h Lsp.Hover(uri 2 4)
+⎕←'hover result: ',r.contents.value
+
+⍝ A position with genuinely nothing to say (a blank line) legitimately
+⍝ comes back as JSON null — ordinary data, not a signal (see
+⍝ Lsp.Hover's own comment and ADR D16).
+r2←h Lsp.Hover(uri 1 0)
+⎕←'no-hover-info result is JSON null: ',⍕r2≡⊂'null'
+
+Lsp.Disconnect h
+⎕←'status after disconnect=',h.JsonRpcCl.Status
+⎕OFF

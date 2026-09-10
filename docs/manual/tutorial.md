@@ -297,6 +297,68 @@ from `JsonRpc`'s (`Connect`/`Call`/`Notify`/`Disconnect`, the same
 underneath — and a real, unrelated piece of tooling (a Python language
 server, nothing to do with MCP or fff) just worked against it.
 
+## Step 6 — `Lsp`: a minimal cover, actually asking pyright something
+
+Step 5 only proved `JsonRpcCl` could talk to `pyright-langserver` at
+all — a hand-rolled `initialize` call, nothing turned into a real
+answer. `Lsp` (ADR D16) is a small cover on top, the same shape as
+`Mcp` is on top of `JsonRpc`, that does the full handshake and can
+actually ask pyright about some code:
+
+```apl
+⎕FIX'file://D:/devel/mcp-client/src/Lsp.dyalog'
+
+opts←(Timeout:90)
+h←opts Lsp.Connect'cmd.exe' '/C' 'npx' '-y' '-p' 'pyright' 'pyright-langserver' '--stdio'
+⎕←'capabilities: ',⍕h.ServerCapabilities.⎕NL ¯2
+```
+```
+capabilities:  callHierarchyProvider  textDocumentSync 
+```
+
+`Lsp.Connect` does the handshake `JsonRpcCl.Call` alone can't: besides
+`initialize`, LSP also requires an `initialized` *notification*
+(empty params, not no params) before a server will do anything useful
+with later requests — easy to miss, since nothing in the `initialize`
+response itself says so.
+
+With a handle in hand, open a real file's text — the file at `uri`
+need not even exist on disk; LSP's `text` is authoritative — and ask
+for hover info at a position (0-based, LSP's own convention):
+
+```apl
+uri←'file:///D:/devel/mcp-client/examples/hover-fixture.py'
+text←'import os',(⎕UCS 10),(⎕UCS 10),'os.getcwd()',(⎕UCS 10)
+h Lsp.DidOpen(uri text 'python')
+
+r←h Lsp.Hover(uri 2 4)
+⎕←'hover: ',r.contents.value
+```
+```
+hover: (function) def getcwd() -> str
+```
+
+A position with nothing to say comes back as JSON `null` — ordinary
+data, not a fault, same reasoning as `Mcp.CallTool`'s `isError` split
+(ADR D6/D11):
+
+```apl
+r2←h Lsp.Hover(uri 1 0)
+⎕←'no info here -> null: ',⍕r2≡⊂'null'
+```
+```
+no info here -> null: 1
+```
+
+```apl
+Lsp.Disconnect h
+```
+
+That's the whole of `Lsp`'s v1 scope — see `docs/adr/0001-architecture-
+decisions.md`'s D16 and `TODO.md` for what it deliberately doesn't do
+yet (diagnostics, completion, definition, and everything else LSP
+defines beyond hover).
+
 ## Where to go next
 
 - [Reference](reference.md) — every verb, looked up by layer.
@@ -304,9 +366,7 @@ server, nothing to do with MCP or fff) just worked against it.
   choices was made, including several things this Tutorial glossed
   over (the token-based synchronization inside `Shell`, why `Fff`'s
   parser is deliberately best-effort, the stderr-callback gotcha
-  mentioned above, and the `⎕SHELL` variant quirks `JsonRpcCl` hit
-  along the way).
-- `TODO.md` — what's explicitly not built yet, including a proper
-  cover on top of `JsonRpcCl` (Step 5 only proves the transport, the
-  way Step 1 does for `Shell` — nothing there turns LSP responses into
-  structured data the way `Fff` does for `fff-mcp`).
+  mentioned above, the `⎕SHELL` variant quirks `JsonRpcCl` hit along
+  the way, and the LSP handshake/`null`-result specifics `Lsp` hit).
+- `TODO.md` — what's explicitly not built yet, including the rest of
+  LSP beyond `Lsp`'s narrow v1 scope.
