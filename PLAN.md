@@ -17,8 +17,45 @@ misbehaviors. Phase 8 generalizes `JsonRpc`/`JsonRpcCl` beyond ADR D7's
 v1 one-in-flight-request limit — pipelined `Send`/`AwaitResponse`,
 JSON-RPC batch requests (`CallBatch`), and notification dispatch
 (`OnNotification`) — and gives `Mcp` a reaction to
-`notifications/tools/list_changed`. See Phases 8, 10, 9, and 6 below,
-in that order.
+`notifications/tools/list_changed`. Phase 7 hardened what all of that
+runs on: a force-kill fallback for a child process that ignores its
+stdin being closed, opt-in stderr capture, JSON-RPC error `code`/`data`
+surviving an `Mcp`-layer signal, and verified multi-process operation.
+See Phases 7, 8, 10, 9, and 6 below, in that order.
+
+## Phase 7 — robustness hardening
+
+Closes the last robustness items `TODO.md` had against already-working
+layers, all made deterministically reproducible by Phase 6's fixture
+server first (which is why this phase was scheduled after it). Per ADR
+D18:
+
+- **Force-kill fallback.** `Shell.Stop` and `JsonRpcCl.Disconnect` used
+  to close the child's stdin, wait ~10s, and give up — leaving a server
+  that never notices EOF (test/09's `hang` mode) running forever, which
+  had already been observed to block a *later, unrelated* process
+  launch outright. Both now `9(8373⌶)h.Tid` once `opts.StopWait`
+  (default 10s) elapses, then wait briefly so the handle reads
+  `Status='Exited'` rather than a stale `'Running'`. `h.Killed` records
+  whether the kill was needed.
+- **Opt-in stderr capture.** Stream 2 stays discarded by default (ADR
+  D5/D11), but `opts.CaptureStderr←1` queues those lines onto
+  `h.StderrLines`, in both transports — opt-in because nothing drains
+  that queue. The toy servers gained a `log(text)` method to provoke it.
+- **JSON-RPC error detail preserved.** `Mcp.ListTools`/`CallTool` fold
+  the error's `code` (and `data`) into the signalled message, and stash
+  the whole error object on `h.LastError` for a caller that needs to
+  branch on the code — `⎕SIGNAL` itself can only override names `⎕DMX`
+  already defines, so it had nowhere to carry a structured payload.
+- **Multiple concurrent children: verified, no code change.** Three
+  NDJSON children plus one Content-Length child, all mid-flight at
+  once, each getting back its own answer; token bases distinct as
+  designed.
+
+Verified by `test/14-robustness-hardening.apls` (all five items), with
+`test/09`'s `hang` section now asserting the force-kill it used to be
+the source of orphans from. `Get-Process python` reports zero survivors
+after a full run.
 
 ## Phase 8 — `JsonRpc`/`JsonRpcCl`: pipelining, batch requests, notification dispatch
 

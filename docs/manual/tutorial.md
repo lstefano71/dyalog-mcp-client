@@ -56,6 +56,15 @@ resp←10 Shell.Receive h
 Shell.Stop h
 ```
 
+`Shell.Stop` closes the child's stdin and waits for it to exit — and
+force-kills it if it doesn't. Almost every server treats EOF on stdin
+as "shut down" and goes quietly; one that blocks in a wait with no
+timeout never notices, and would otherwise outlive the interpreter as
+an orphan. `h.Killed` afterwards tells you which of the two you were
+dealing with. You don't normally need to care, which is the point, but
+it's worth knowing the handle can tell you (see Reference, and ADR
+D18 for the trouble that orphan actually caused).
+
 Notice: `Shell` handed us back *text*. It has no idea it's JSON, let
 alone MCP. That's the whole point of this layer — it would work
 exactly the same way talking to something that speaks CSV lines, or

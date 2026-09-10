@@ -28,15 +28,22 @@ back lines as they arrive, stops it. Knows nothing about JSON-RPC or
 MCP. Source: `src/Shell.dyalog`.
 
 **Handle fields**: `Cmd`, `WorkingDir`, `Lines`, `Status`
-(`'Running'`|`'Exited'`), `ExitCode`, `ExitReason`, `Pid`, plus the
-token-range bookkeeping (`Tok`/`InTok`/`SigTok`/`Tid`) — see ADR D1 if
-you need to know what those are for; you shouldn't need to touch them.
+(`'Running'`|`'Exited'`), `ExitCode`, `ExitReason`, `Pid`, `StopWait`,
+`Killed`, `CaptureStderr`, `StderrLines`, plus the token-range
+bookkeeping (`Tok`/`InTok`/`SigTok`/`Tid`) — see ADR D1 if you need to
+know what those are for; you shouldn't need to touch them.
 
 ### `h←{opts}Start cmd`
 
 Starts `cmd` (a vector of character vectors: the program path followed
 by its arguments) on its own thread and returns a handle. `opts`, if
-given, is a namespace that may set `WorkingDir`.
+given, is a namespace that may set:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `WorkingDir` | `''` | working directory for the child process |
+| `StopWait` | `10` | seconds `Stop` waits for a clean exit before force-killing |
+| `CaptureStderr` | `0` | `1` to collect the child's stderr into `h.StderrLines` instead of discarding it |
 
 ```apl
 exe←'C:\Users\stf\AppData\Local\fff-mcp\bin\fff-mcp.exe'
@@ -75,8 +82,9 @@ read, or if the timeout elapses first.
 
 ### `{r}←Stop h`
 
-Closes stdin, waits (up to ~10s) for the child to exit, releases the
-handle's token range. Safe to call more than once.
+Closes stdin, waits up to `h.StopWait` seconds for the child to exit,
+**force-kills it if that deadline passes**, then releases the handle's
+token range. Safe to call more than once.
 
 ```apl
 Shell.Stop h
@@ -85,6 +93,42 @@ Shell.Stop h ⍝ must be safe to call twice
 ⎕←'status after second stop=',h.Status
 ```
 (`test/03-lifecycle-edge-cases.apls`)
+
+Closing stdin is enough for any server that treats EOF as "shut
+down" — which is all of them, until it isn't. A server blocked in a
+wait with no timeout never notices, so the graceful wait can only run
+out; `Stop` then terminates it outright (`9(8373⌶)`, ADR D18) rather
+than leaving an orphan behind, and sets `h.Killed←1` to say so. It
+also waits briefly afterwards, so `h.Status` reads `'Exited'` by the
+time `Stop` returns instead of a stale `'Running'`.
+
+```apl
+h←(StopWait:1)JsonRpc.Connect fixture   ⍝ a server that ignores EOF
+⍝ ... it hangs, we time out ...
+JsonRpc.Disconnect h
+⎕←'Killed=',(⍕h.Shell.Killed),' Status=',h.Shell.Status
+⍝ Killed=1 Status=Exited
+```
+(`test/14-robustness-hardening.apls`)
+
+### Inspecting a server's stderr
+
+Stream 2 is discarded by default: a server logging there is legal and
+none of our business, and it must never reach the line-oriented
+protocol stream (ADR D5/D11). When you need to see it — a server
+misbehaving, and its own diagnostics being the only clue — ask for it
+with `CaptureStderr`:
+
+```apl
+h←(CaptureStderr:1)JsonRpc.Connect toy
+{}h JsonRpc.Call('log'(text:'stderr line one'))
+⎕←h.Shell.StderrLines
+```
+(`test/14-robustness-hardening.apls`)
+
+Opt-in rather than the default because nothing ever drains
+`StderrLines`: leave it on for a chatty long-running server and it
+grows without bound.
 
 ---
 
@@ -107,7 +151,8 @@ them), `NotifyMethods`/`NotifyHandlers` (the `OnNotification` table).
 ### `h←{opts}Connect cmd`
 
 `Shell.Start cmd`, plus JSON-RPC bookkeeping. `opts` may set
-`WorkingDir` (forwarded to `Shell.Start`) and `Timeout`.
+`Timeout`, plus anything `Shell.Start` accepts (`WorkingDir`,
+`StopWait`, `CaptureStderr`) — the whole namespace is forwarded there.
 
 ```apl
 exe←'C:\Users\stf\AppData\Local\fff-mcp\bin\fff-mcp.exe'
@@ -119,7 +164,7 @@ h←opts JsonRpc.Connect,⊂exe
 
 ### `{r}←Disconnect h`
 
-`Shell.Stop h.Shell`.
+`Shell.Stop h.Shell` — including its force-kill fallback.
 
 ```apl
 JsonRpc.Disconnect h
@@ -231,11 +276,13 @@ h JsonRpc.OnNotification('custom/event' '#._MyHandler')
 
 Performs the `initialize`/`notifications/initialized` handshake and
 exposes `tools/list`/`tools/call`. Scope is deliberately narrow (ADR
-D8) — resources, prompts, sampling, roots, pagination, and
-`list_changed` notifications aren't implemented. Source: `src/Mcp.dyalog`.
+D8) — resources, prompts, sampling, roots and pagination aren't
+implemented. Source: `src/Mcp.dyalog`.
 
 **Handle fields** (in addition to the `JsonRpc` handle it wraps, at
-`h.JsonRpc`): `ServerInfo` (`{name, version}`), `ServerCapabilities`.
+`h.JsonRpc`): `ServerInfo` (`{name, version}`), `ServerCapabilities`,
+`LastError` (the whole JSON-RPC error object from the most recent
+protocol-level failure — `⍬` until one happens).
 `Connect` also registers a `notifications/tools/list_changed` handler
 on `h.JsonRpc` (ADR D17) — see `ListTools` below for `ToolsStale`.
 
@@ -313,6 +360,27 @@ result←h Mcp.CallTool('find_files'(query:'Mcp'))
 :EndTrap
 ```
 (`test/05-mcp-roundtrip.apls`)
+
+### Reading a protocol-level error's detail
+
+`ListTools`/`CallTool` fold the JSON-RPC error's `code` (and `data`, if
+the server sent one) into the message they signal with, and put the
+whole error object on `h.LastError` — `⎕SIGNAL` can only override names
+`⎕DMX` already defines, so it has nowhere to carry a structured payload
+of its own (ADR D18). Read the message to *report* the failure; read
+`h.LastError` to *branch* on it.
+
+```apl
+:Trap 999
+    {}h Mcp.CallTool'find_files'  ⍝ no query given
+:Else
+    ⎕←⎕DMX.EM
+    ⍝ Mcp.CallTool: failed to deserialize parameters: missing field
+    ⍝ `query` (JSON-RPC code ¯32602)
+:EndTrap
+⎕←'code=',⍕h.LastError.code   ⍝ ¯32602
+```
+(`test/14-robustness-hardening.apls`)
 
 ---
 
@@ -494,9 +562,15 @@ messages received but not yet consumed — a batch frame is split into
 its individual elements here, same as a single one), `Status`,
 `ExitCode`, `ExitReason`, `Pid`, `NextId`, `Timeout` (default `10`),
 `Notifications`, `PendingIds`/`PendingMsgs`, `NotifyMethods`/
-`NotifyHandlers` (same meaning as in `JsonRpc` — see ADR D17).
+`NotifyHandlers` (same meaning as in `JsonRpc` — see ADR D17), plus
+`StopWait`, `Killed`, `CaptureStderr`, `StderrLines` (same meaning as
+on the `Shell` handle — see ADR D18).
 
 ### `h←{opts}Connect cmd`
+
+`opts` may set `Timeout`, `WorkingDir`, `StopWait`, `CaptureStderr` —
+the same options `Shell.Start`/`JsonRpc.Connect` take, since this layer
+does its own `⎕SHELL` bookkeeping rather than delegating it.
 
 ```apl
 h←JsonRpcCl.Connect'python' 'D:\devel\mcp-client\examples\toy-jsonrpc-cl-server.py'
@@ -504,6 +578,10 @@ h←JsonRpcCl.Connect'python' 'D:\devel\mcp-client\examples\toy-jsonrpc-cl-serve
 (`test/08-jsonrpccl-toy-server.apls`)
 
 ### `{r}←Disconnect h`
+
+Same shape as `Shell.Stop`, force-kill fallback included: closes stdin,
+waits up to `h.StopWait` seconds, then terminates the child and sets
+`h.Killed←1` if it hasn't exited (ADR D18).
 
 ```apl
 JsonRpcCl.Disconnect h

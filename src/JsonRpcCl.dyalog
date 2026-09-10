@@ -33,6 +33,11 @@
 ⍝                                  ADR D17) — arrived-but-not-yet-
 ⍝                                  awaited responses, keyed by id
 ⍝   NotifyMethods NotifyHandlers   same meaning as in JsonRpc (ADR D17)
+⍝   StopWait Killed CaptureStderr StderrLines
+⍝                       same meaning as on the Shell handle (ADR D18) —
+⍝                       Disconnect force-kills a child that ignores its
+⍝                       stdin being closed, and stderr is capturable
+⍝                       rather than only discardable
 
     ⎕IO←1 ⋄ ⎕ML←1
 
@@ -57,26 +62,55 @@
         Notifications:⍬
         PendingIds:⍬ ⋄ PendingMsgs:⍬
         NotifyMethods:⍬ ⋄ NotifyHandlers:⍬
+        StopWait:opts ⎕VGET⊂'StopWait' 10
+        Killed:0
+        CaptureStderr:opts ⎕VGET⊂'CaptureStderr' 0
+        StderrLines:⍬
       )
       h.Tid←_Run&h ⍝ needs h to already exist, so can't join the literal above
     ∇
 
     ∇ {r}←Disconnect h
-      ⍝ TODO: no force-kill fallback yet — see the equivalent TODO.md
-      ⍝ item for Shell.Stop; the same gap applies here.
+      ⍝ Same shape as Shell.Stop, including its force-kill fallback —
+      ⍝ see Shell._ForceKill for the full reasoning (ADR D18); this
+      ⍝ namespace is deliberately self-contained (see the header), so
+      ⍝ the few lines are duplicated rather than shared.
       :If h.Status≡'Running'
           ⎕TPUT h.InTok ⍝ a token with no data closes the fed stream
-          n←10
-          :While (h.Status≡'Running')∧(n>0)
-              {}1 ⎕TGET h.SigTok
-              n←n-1
-          :EndWhile
+          _AwaitExit h h.StopWait
+          :If h.Status≡'Running'
+              h.Killed←_ForceKill h
+          :EndIf
       :EndIf
       :Trap 0
           h.Tok ⎕TALLOC ¯1
       :Else
       :EndTrap
       r←⍬
+    ∇
+
+    ∇ {r}←_AwaitExit(h seconds)
+      ⍝ See Shell._AwaitExit.
+      n←seconds
+      :While (h.Status≡'Running')∧(n>0)
+          {}1 ⎕TGET h.SigTok
+          n←n-1
+      :EndWhile
+      r←⍬
+    ∇
+
+    ∇ ok←_ForceKill h
+      ⍝ See Shell._ForceKill — identical, including why the right
+      ⍝ argument is h.Tid (an APL thread number, not a PID) and why 9
+      ⍝ is the only signal Windows accepts.
+      ok←0
+      :Trap 0
+          ok←9(8373⌶)h.Tid
+      :Else
+      :EndTrap
+      :If ok
+          _AwaitExit h 5
+      :EndIf
     ∇
 
     ∇ {r}←h Notify args
@@ -236,7 +270,18 @@
     ∇
 
     ∇ {r}←h _OnStderr info
-      r←1 ⍝ discarded — see Shell._OnStderr's ADR note; same reasoning
+      ⍝ Discarded unless opts.CaptureStderr asked for it — see
+      ⍝ Shell._OnStderr, same reasoning and same ADRs (D5/D11/D18).
+      ⍝ This stream is in ordinary line mode (see _Run), so info.Output
+      ⍝ is already split into lines here, unlike stream 1's.
+      :If h.CaptureStderr
+          lines←info.Output
+          :If info.PartialLine∧~info.Done
+              lines←¯1↓lines
+          :EndIf
+          h.StderrLines,←lines
+      :EndIf
+      r←1
     ∇
 
     ∇ {r}←_ExtractMessages h

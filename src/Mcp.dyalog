@@ -1,13 +1,19 @@
 :Namespace Mcp
 ⍝ MCP protocol semantics over JsonRpc. v1 scope is deliberately narrow
 ⍝ (ADR D8): the initialize/initialized handshake, tools/list, and
-⍝ tools/call. Resources, prompts, sampling, roots, pagination and
-⍝ list_changed notifications are not implemented — see TODO.md.
+⍝ tools/call, plus a reaction to notifications/tools/list_changed
+⍝ (added in Phase 8 — see the ToolsStale note below). Resources,
+⍝ prompts, sampling, roots and pagination are not implemented — see
+⍝ TODO.md.
 ⍝
 ⍝ Handle shape (adds to the JsonRpc handle it wraps):
 ⍝   JsonRpc              the underlying JsonRpc handle (see JsonRpc.dyalog)
 ⍝   ServerInfo            {name, version} from the initialize response
 ⍝   ServerCapabilities    the capabilities object the server advertised
+⍝   LastError             the whole JSON-RPC error object (code, message,
+⍝                         and data if the server sent one) from the most
+⍝                         recent protocol-level failure ListTools/CallTool
+⍝                         signalled on — ⍬ until one happens (ADR D18)
 ⍝
 ⍝ ToolsStale (Phase 8, ADR D17): Connect registers _OnToolsListChanged
 ⍝ against 'notifications/tools/list_changed' on the underlying JsonRpc
@@ -28,7 +34,9 @@
       params←(protocolVersion:_PROTOCOL_VERSION ⋄ capabilities:() ⋄ clientInfo:_CLIENT_INFO)
       resp←jr #.JsonRpc.Call('initialize' params)
       :If 0≠⎕NC'resp.error'
-          ('Mcp.Connect: server rejected initialize: ',resp.error.message)⎕SIGNAL 999
+          ⍝ No handle to stash LastError on — Connect is failing, so the
+          ⍝ caller never receives one; the code/data are in the message.
+          (_RpcErrorText('Mcp.Connect: server rejected initialize' resp.error))⎕SIGNAL 999
       :EndIf
       jr #.JsonRpc.Notify'notifications/initialized'
       jr.ToolsStale←0
@@ -37,7 +45,33 @@
         JsonRpc:jr
         ServerInfo:resp.result.serverInfo
         ServerCapabilities:resp.result.capabilities
+        LastError:⍬
       )
+    ∇
+
+    ∇ msg←_RpcErrorText args
+      ⍝ args: (prefix errorObject). Builds the text to signal for a
+      ⍝ protocol-level JSON-RPC error. The error's `code` (and `data`,
+      ⍝ when the server sent one) used to be dropped on the floor here,
+      ⍝ leaving only `message` — see ADR D18. Both are folded into the
+      ⍝ text so a human reading the signal sees them; a caller that
+      ⍝ needs to BRANCH on the code reads h.LastError instead, since
+      ⍝ ⎕SIGNAL can only override names ⎕DMX already defines and has
+      ⍝ nowhere to carry a structured payload of our own.
+      (prefix err)←args
+      msg←prefix,': ',err.message
+      code←err ⎕VGET⊂'code' ⍬
+      :If 0≠≢code
+          msg,←' (JSON-RPC code ',(⍕code),')'
+      :EndIf
+      :If 0≠err.⎕NC⊂'data'
+          :Trap 0
+              msg,←', data: ',⎕JSON err.data
+          :Else
+              ⍝ data is legal JSON by construction (it arrived as JSON),
+              ⍝ but never let rendering it turn into the reported error.
+          :EndTrap
+      :EndIf
     ∇
 
     ∇ {r}←h _OnToolsListChanged notif
@@ -60,7 +94,8 @@
       ⍝ whatever the server hands back in one tools/list response.
       resp←h.JsonRpc #.JsonRpc.Call'tools/list'
       :If 0≠⎕NC'resp.error'
-          ('Mcp.ListTools: ',resp.error.message)⎕SIGNAL 999
+          h.LastError←resp.error
+          (_RpcErrorText('Mcp.ListTools' resp.error))⎕SIGNAL 999
       :EndIf
       tools←resp.result.tools
       h.JsonRpc.ToolsStale←0 ⍝ a fresh list was just fetched — see the ToolsStale note above
@@ -78,7 +113,8 @@
       :EndIf
       resp←h.JsonRpc #.JsonRpc.Call('tools/call'(name:name ⋄ arguments:arguments))
       :If 0≠⎕NC'resp.error'
-          ('Mcp.CallTool: ',resp.error.message)⎕SIGNAL 999
+          h.LastError←resp.error
+          (_RpcErrorText('Mcp.CallTool' resp.error))⎕SIGNAL 999
       :EndIf
       result←resp.result
     ∇

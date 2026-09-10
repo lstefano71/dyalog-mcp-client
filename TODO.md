@@ -34,8 +34,9 @@ from.
   - ~~Same gaps `JsonRpc` has~~ — done: `JsonRpcCl` now has the same
     `Send`/`AwaitResponse`/`CallBatch`/`OnNotification` generalization
     as `JsonRpc` (Phase 8, ADR D17), landed symmetrically in both.
-    Still open: no `Stop`/`Disconnect` force-kill fallback (same as
-    the `Shell.Stop` TODO below).
+    ~~Still open: no `Stop`/`Disconnect` force-kill fallback~~ — also
+    done (Phase 7, ADR D18): `JsonRpcCl.Disconnect` force-kills via
+    `9(8373⌶)` once its graceful wait elapses, same as `Shell.Stop`.
   - **The real-LSP verification is now a committed test**
     (`test/11-lsp-cover.apls`), unlike the note below might suggest at
     a glance — but it's the one test in the suite that needs network
@@ -46,14 +47,23 @@ from.
 
 ## Shell layer
 
-- **Inspecting stderr**: stream 2 is discarded (`Shell._OnStderr`, ADR
-  D11) rather than merged into stream 1 or captured — correct for
-  keeping the protocol stream clean, but there's currently no way to
-  see what a server logged there if you need to debug it. Add an
-  optional second queue (`h.StderrLines`, say) if that's ever needed.
-- **Multiple concurrent child processes per interpreter**: works today
-  (each `Start` gets its own `⎕TALLOC` range), but untested beyond one at
-  a time — verify once there's an actual multi-server use case.
+- ~~**Inspecting stderr**~~ — done (Phase 7, ADR D18): stream 2 is
+  still discarded by default (ADR D5/D11 — keeping the protocol stream
+  clean), but `opts.CaptureStderr←1` now queues those lines onto
+  `h.StderrLines` for debugging, in both `Shell` and `JsonRpcCl`.
+  Deliberately opt-in: nothing drains that queue, so a chatty
+  long-running server would otherwise grow it without bound. The toy
+  servers gained a `log(text)` method to exercise it. Still open: no
+  cap or ring-buffer on the queue if a caller does turn it on for a
+  very chatty server and never looks at it — add a `StderrLimit` if
+  that ever bites.
+- ~~**Multiple concurrent child processes per interpreter**~~ — done
+  (Phase 7, ADR D18): verified, no code change needed. `test/14` runs
+  three NDJSON children plus one Content-Length child at once, all
+  requests fired before any response is collected, with per-handle
+  distinct payloads so a crossed reply would show as a wrong value
+  rather than pass by luck. Token bases came out distinct (`8 9 10 11`)
+  as designed.
 - ~~Process crash mid-`Receive`~~ — confirmed via
   `test/09-fixture-server-misbehaviors.apls`'s `crash` mode (ADR D14):
   `Shell.Receive`/`JsonRpc.Call` signal with `'Shell.Receive: process
@@ -61,25 +71,27 @@ from.
   fixture server was told to exit with. No fix needed — this was
   already the intended behavior, just previously unverified against an
   actual mid-`Receive` crash.
-- **`Stop` force-kill**: currently waits up to ~10s for the child to exit
-  after closing stdin, then gives up (still releases the token range
-  regardless). Should force-kill via `8373⌶` (see `⎕SHELL`'s docs on
-  abandoned child processes) if the deadline passes without a clean exit.
-  Concretely demonstrated (not just reasoned about) by `test/09`'s
-  `hang` mode: `Shell.Stop` waits the full ~10s and returns, but the
-  child process itself is left running forever afterward (confirmed via
-  `Get-Process python` still showing it) — closing stdin does nothing
-  for a server blocked in a wait with no timeout, and there's currently
-  no way to reap it short of an external kill. **Worse than just an
-  orphan**: running the full test suite as a sequence of separate
-  `dyalogscript.ps1` invocations, one such orphan from an earlier
-  `test/09` run caused a *later, unrelated* `dyalogscript.ps1` launch
-  (a completely separate process, for a different test) to hang
+- ~~**`Stop` force-kill**~~ — done (Phase 7, ADR D18). `Shell.Stop`
+  (and `JsonRpcCl.Disconnect`) now force-kill via `9(8373⌶)h.Tid` once
+  the graceful wait — `opts.StopWait`, default 10s — elapses without a
+  clean exit, then wait briefly for `⎕SHELL` to return so the handle
+  reads `Status='Exited'` rather than a stale `'Running'`.
+  `h.Killed` records whether the kill was needed. `test/14` asserts
+  both directions (a `hang`ing child gets killed; a child that exits on
+  EOF does not), and `Get-Process python` now reports zero survivors
+  after a full run.
+  Kept for the record, since it was the concrete motivation and the
+  cross-process part was never fully explained: the orphan this left
+  behind didn't merely leak. Running the full test suite as a sequence
+  of separate `dyalogscript.ps1` invocations, one orphan from an
+  earlier `test/09` run caused a *later, unrelated* `dyalogscript.ps1`
+  launch (a completely separate process, for a different test) to hang
   indefinitely with no error — killing the orphaned `python.exe`
-  processes unblocked it immediately. Root cause not fully diagnosed
-  (plausibly inherited stdio/console handles on Windows), but this
-  makes the missing force-kill a real reliability hazard for routine
-  test runs, not just leaked-process housekeeping.
+  processes unblocked it immediately. Root cause never diagnosed
+  (plausibly inherited stdio/console handles on Windows); the
+  force-kill removes the trigger rather than explaining it, so if an
+  unexplained `dyalogscript.ps1` hang ever reappears, a stray child
+  process is still the first thing worth checking.
 
 ## JSON-RPC layer
 
@@ -202,13 +214,15 @@ Still open:
   unsupported one (spec says the client SHOULD disconnect) — add explicit
   handling once tested against a server that actually negotiates down.
 
-- **Preserve JSON-RPC error detail on Mcp-layer signals**: `Mcp.ListTools`/
-  `Mcp.CallTool` currently signal with only `resp.error.message` when the
-  server returns a protocol-level JSON-RPC error (e.g. invalid params,
-  unknown tool). The error's `code` and `data` are discarded. Worth
-  carrying them through (e.g. via `⎕SIGNAL`'s name/value form) once
-  something downstream needs to branch on the error code rather than just
-  report it.
+- ~~**Preserve JSON-RPC error detail on Mcp-layer signals**~~ — done
+  (Phase 7, ADR D18). `⎕SIGNAL`'s name/value form turned out to be the
+  wrong vehicle: it can only override names a system-generated `⎕DMX`
+  already defines, so there's nowhere in the signal to put a payload of
+  our own. Instead the `code` (and `data`, when present) are folded
+  into the signalled message text, and the whole error object is
+  stashed on `h.LastError` for a caller that needs to branch on the
+  code rather than just report it. Verified against the real fff-mcp's
+  own `¯32602` invalid-params path (`test/14`).
 
 ## Documentation
 

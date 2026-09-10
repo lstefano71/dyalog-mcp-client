@@ -16,6 +16,11 @@ Methods:
   add(a, b)           -> a + b
   sleep(seconds)       -> "slept <seconds>s" (after actually sleeping —
                           lets a client demonstrate a Receive timeout)
+  log(text)            -> "logged", after writing text to STDERR — a
+                          perfectly legal thing for a server to do (ADR
+                          D5) that must never reach the protocol stream;
+                          lets a client exercise stderr capture
+                          (Shell's CaptureStderr option, ADR D18).
 
 Run directly: python examples/toy-jsonrpc-server.py
 """
@@ -48,6 +53,12 @@ def _sleep(params):
     seconds = params["seconds"]
     time.sleep(seconds)
     return f"slept {seconds}s"
+
+
+@method("log")
+def _log(params):
+    print(params.get("text", "log line"), file=sys.stderr, flush=True)
+    return "logged"
 
 
 def main():

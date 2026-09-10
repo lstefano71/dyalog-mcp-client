@@ -1,0 +1,177 @@
+#!/usr/local/bin/dyalogscript
+⍝ Phase 7 (ADR D18): the robustness items TODO.md had left open once
+⍝ Phase 6's fixture server (test/09) made them deterministically
+⍝ reproducible — a force-kill fallback for a child that ignores stdin
+⍝ being closed, opt-in stderr capture, JSON-RPC error code/data
+⍝ surviving an Mcp-layer signal, and multiple concurrent child
+⍝ processes in one interpreter.
+⍝
+⍝ Note this test deliberately starts processes that CANNOT be stopped
+⍝ gracefully (test/09's `hang`, and an hour-long `sleep`) — if the
+⍝ force-kill it's testing ever regresses, this script is where an
+⍝ orphaned python.exe would come from, so a failure here is worth
+⍝ chasing immediately rather than at leisure (TODO.md's Shell-layer
+⍝ section records an orphan from an earlier run blocking a later,
+⍝ unrelated dyalogscript.ps1 launch outright).
+⎕IO←1
+⎕FIX'file://D:/devel/mcp-client/src/Shell.dyalog'
+⎕FIX'file://D:/devel/mcp-client/src/JsonRpc.dyalog'
+⎕FIX'file://D:/devel/mcp-client/src/JsonRpcCl.dyalog'
+⎕FIX'file://D:/devel/mcp-client/src/Mcp.dyalog'
+
+fixture←'python' 'D:\devel\mcp-client\examples\toy-jsonrpc-fixture-server.py'
+toy←'python' 'D:\devel\mcp-client\examples\toy-jsonrpc-server.py'
+toycl←'python' 'D:\devel\mcp-client\examples\toy-jsonrpc-cl-server.py'
+
+⍝ ⍺ Check ⍵ — 0 when the condition held, 1 (after reporting) when it
+⍝ didn't, so failures accumulate with nFail+←.
+Check←{⍺:0 ⋄ ⎕←'FAIL: ',⍵ ⋄ 1}
+nFail←0
+
+⍝ --- 1. Force-kill: a child that ignores stdin being closed ---------
+⍝ test/09's `hang` blocks forever in a wait with no timeout, so it
+⍝ never notices EOF on stdin: before this phase, Stop waited out its
+⍝ whole deadline and returned with the process still Running — and
+⍝ still running long after the interpreter itself had gone. StopWait:1
+⍝ keeps the graceful wait short so the test doesn't pay 10s for it.
+h←(StopWait:1 ⋄ Timeout:2)JsonRpc.Connect fixture
+:Trap 999
+    {}h JsonRpc.Call'hang'
+    nFail+←0 Check'expected a timeout signal from hang'
+:Else
+    ⎕←'hang -> timed out as expected'
+:EndTrap
+JsonRpc.Disconnect h
+⎕←'after Stop of a hung child: Killed=',(⍕h.Shell.Killed),' Status=',h.Shell.Status
+nFail+←(h.Shell.Killed≡1)Check'a hung child should have been force-killed'
+nFail+←(h.Shell.Status≡'Exited')Check'a force-killed child should end up Exited'
+
+⍝ --- 2. ...but a well-behaved child is NOT force-killed -------------
+⍝ The graceful path must still be the one that runs when it can: a
+⍝ server that exits on EOF should never see signal 9.
+h←(StopWait:5)JsonRpc.Connect toy
+r←h JsonRpc.Call('echo'(text:'graceful'))
+⎕←'graceful echo -> ',r.result
+JsonRpc.Disconnect h
+⎕←'after Stop of a well-behaved child: Killed=',(⍕h.Shell.Killed),' Status=',h.Shell.Status
+nFail+←(h.Shell.Killed≡0)Check'a child that exits on EOF must not be force-killed'
+nFail+←(h.Shell.Status≡'Exited')Check'a well-behaved child should be Exited'
+
+⍝ --- 3. Same force-kill fallback on the Content-Length transport ----
+⍝ JsonRpcCl is self-contained (it talks to ⎕SHELL directly rather than
+⍝ through Shell), so its Disconnect needed the same fix independently.
+⍝ The CL toy server has no `hang`, but a single-threaded sleep of an
+⍝ hour is indistinguishable from one for this purpose.
+hcl←(StopWait:1 ⋄ Timeout:2)JsonRpcCl.Connect toycl
+:Trap 999
+    {}hcl JsonRpcCl.Call('sleep'(seconds:3600))
+    nFail+←0 Check'expected a timeout signal from a 3600s sleep'
+:Else
+    ⎕←'cl sleep -> timed out as expected'
+:EndTrap
+JsonRpcCl.Disconnect hcl
+⎕←'after CL Disconnect of a sleeping child: Killed=',(⍕hcl.Killed),' Status=',hcl.Status
+nFail+←(hcl.Killed≡1)Check'a sleeping CL child should have been force-killed'
+nFail+←(hcl.Status≡'Exited')Check'a force-killed CL child should end up Exited'
+
+⍝ --- 4. Stderr capture (opt-in) -------------------------------------
+⍝ Stream 2 stays discarded by default (ADR D5/D11 — a server logging
+⍝ there is legal and none of our business), but is now inspectable on
+⍝ request. The protocol stream must stay clean either way: the `log`
+⍝ response itself has to arrive intact, not be corrupted by the stderr
+⍝ line the same call produced.
+h←(CaptureStderr:1)JsonRpc.Connect toy
+r←h JsonRpc.Call('log'(text:'stderr line one'))
+⎕←'log -> ',r.result
+r←h JsonRpc.Call('log'(text:'stderr line two'))
+⍝ stdout and stderr are separate streams with no ordering guarantee
+⍝ between them, so give the stderr callback a moment to have run.
+⎕DL 1
+⎕←'captured stderr lines: ',⍕h.Shell.StderrLines
+nFail+←(2=≢h.Shell.StderrLines)Check'expected exactly the two stderr lines the server logged'
+nFail+←(∨/'stderr line one'∘≡¨h.Shell.StderrLines)Check'the first logged line should be captured verbatim'
+nFail+←('logged'≡r.result)Check'the protocol stream must stay clean while stderr is captured'
+JsonRpc.Disconnect h
+
+⍝ Default is still discard — nothing captured, nothing leaked.
+h←JsonRpc.Connect toy
+{}h JsonRpc.Call('log'(text:'unwanted'))
+⎕DL 1
+⎕←'default CaptureStderr=',(⍕h.Shell.CaptureStderr),' lines=',⍕≢h.Shell.StderrLines
+nFail+←(0=≢h.Shell.StderrLines)Check'stderr must stay discarded unless asked for'
+JsonRpc.Disconnect h
+
+⍝ Same on the CL transport.
+hcl←(CaptureStderr:1)JsonRpcCl.Connect toycl
+r←hcl JsonRpcCl.Call('log'(text:'cl stderr line'))
+⎕DL 1
+⎕←'cl captured stderr lines: ',⍕hcl.StderrLines
+nFail+←(∨/'cl stderr line'∘≡¨hcl.StderrLines)Check'CL stderr capture should work the same way'
+nFail+←('logged'≡r.result)Check'the CL protocol stream must stay clean too'
+JsonRpcCl.Disconnect hcl
+
+⍝ --- 5. JSON-RPC error code/data survive an Mcp-layer signal --------
+⍝ Mcp.ListTools/CallTool used to signal with resp.error.message alone,
+⍝ dropping `code` (and `data`) entirely. ⎕SIGNAL can't carry a
+⍝ structured payload of its own — it can only override names ⎕DMX
+⍝ already defines — so the code goes into the message text for a human
+⍝ and the whole error object onto h.LastError for a caller that needs
+⍝ to branch on it. Verified against the real fff-mcp, whose
+⍝ missing-required-argument path is a genuine ¯32602 invalid-params
+⍝ error rather than a fixture's imitation of one.
+exe←'C:\Users\stf\AppData\Local\fff-mcp\bin\fff-mcp.exe'
+h←(WorkingDir:'D:\devel\mcp-client')Mcp.Connect,⊂exe
+nFail+←(⍬≡h.LastError)Check'LastError should start empty'
+:Trap 999
+    {}h Mcp.CallTool'find_files' ⍝ no query given: invalid params
+    nFail+←0 Check'expected a signal for missing required arguments'
+:Else
+    ⎕←'CallTool error signalled: ',⎕DMX.EM
+    nFail+←(∨/'code ¯32602'⍷⎕DMX.EM)Check'the signalled message should name the JSON-RPC code'
+:EndTrap
+⎕←'LastError.code=',⍕h.LastError.code
+nFail+←(¯32602≡h.LastError.code)Check'LastError should carry the structured error code'
+nFail+←(0≠≢h.LastError.message)Check'LastError should carry the message too'
+Mcp.Disconnect h
+
+⍝ --- 6. Multiple concurrent child processes in one interpreter ------
+⍝ Each Start/Connect takes its own ⎕TALLOC token range, so this was
+⍝ designed to work but had never actually been run: three NDJSON
+⍝ children and one Content-Length child, all alive at once, with
+⍝ requests deliberately interleaved so a reply landing on the wrong
+⍝ handle's queue (a shared-token bug) would show up as a wrong answer
+⍝ rather than passing by luck.
+hs←{JsonRpc.Connect toy}¨⍳3
+names←'alpha' 'beta' 'gamma'
+hcl←JsonRpcCl.Connect toycl
+⍝ Fire every request before collecting any response — all four
+⍝ processes are then mid-flight simultaneously.
+ids←hs{⍺ JsonRpc.Send('echo'(text:⍵))}¨names
+idcl←hcl JsonRpcCl.Send('echo'(text:'delta'))
+got←hs{⍺ JsonRpc.AwaitResponse ⍵}¨ids
+got←got.result
+rcl←hcl JsonRpcCl.AwaitResponse idcl
+⎕←'concurrent echoes: ',⍕got
+⎕←'concurrent CL echo: ',rcl.result
+nFail+←(got≡names)Check'each concurrent handle must get back its OWN answer, in order'
+nFail+←('delta'≡rcl.result)Check'the CL handle must not be disturbed by the NDJSON ones'
+⍝ Token ranges must be genuinely distinct, not merely unequal by luck.
+toks←hs.Shell.Tok,hcl.Tok
+⎕←'token bases: ',⍕toks
+nFail+←((≢toks)=≢∪toks)Check'every concurrent handle needs its own token range'
+⍝ Sums differ per handle so a crossed reply would be visible here too.
+sums←hs{r←⍺ JsonRpc.Call('add'(a:⍵ ⋄ b:100)) ⋄ r.result}¨1 2 3
+⎕←'concurrent adds: ',⍕sums
+nFail+←(sums≡101 102 103)Check'concurrent adds must not cross handles'
+{}JsonRpc.Disconnect¨hs
+JsonRpcCl.Disconnect hcl
+nFail+←(∧/'Exited'∘≡¨hs.Shell.Status)Check'every concurrent child should stop cleanly'
+nFail+←(0=+/hs.Shell.Killed)Check'well-behaved concurrent children need no force-kill'
+
+⎕←'nFail=',⍕nFail
+:If nFail≠0
+    ⎕←'FAIL: ',(⍕nFail),' check(s) failed'
+:Else
+    ⎕←'all checks passed'
+:EndIf
+⎕OFF

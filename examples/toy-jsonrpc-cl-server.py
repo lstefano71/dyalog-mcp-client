@@ -7,9 +7,10 @@ Shell/JsonRpc use (see docs/adr/0001-architecture-decisions.md, ADR
 D13). Exists to test JsonRpcCl against something real without needing
 a full language server's initialize handshake.
 
-Methods: same three as examples/toy-jsonrpc-server.py (echo/add/sleep)
-— this is the Content-Length-framed twin of that script, deliberately
-kept in sync so the two transports can be compared directly.
+Methods: same four as examples/toy-jsonrpc-server.py (echo/add/sleep/
+log) — this is the Content-Length-framed twin of that script,
+deliberately kept in sync so the two transports can be compared
+directly.
 
 Run directly: python examples/toy-jsonrpc-cl-server.py
 """
@@ -42,6 +43,12 @@ def _sleep(params):
     seconds = params["seconds"]
     time.sleep(seconds)
     return f"slept {seconds}s"
+
+
+@method("log")
+def _log(params):
+    print(params.get("text", "log line"), file=sys.stderr, flush=True)
+    return "logged"
 
 
 def read_message(stream):

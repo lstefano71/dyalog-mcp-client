@@ -15,13 +15,21 @@
 ⍝   Lines        queue (vector of char vectors) of received stdout lines
 ⍝   Status       'Running' | 'Exited'
 ⍝   ExitCode ExitReason Pid   set once the child process has exited
+⍝   StopWait     seconds Stop waits for a clean exit before force-killing
+⍝                (opts, default 10)
+⍝   Killed       1 if Stop had to force-kill this child, else 0 (D18)
+⍝   CaptureStderr  1 to collect the child's stderr into StderrLines
+⍝                  instead of discarding it (opts, default 0 — D18)
+⍝   StderrLines  queue of captured stderr lines (empty unless
+⍝                CaptureStderr is set)
 
     ⎕IO←1 ⋄ ⎕ML←1
 
     ∇ h←{opts}Start cmd
       ⍝ cmd: a vector of character vectors — the program path followed
       ⍝ by its arguments — as accepted by ⎕SHELL for direct execution.
-      ⍝ opts (optional): namespace, may set WorkingDir.
+      ⍝ opts (optional): namespace, may set WorkingDir, StopWait,
+      ⍝ CaptureStderr.
       :If 0=⎕NC'opts' ⋄ opts←() ⋄ :EndIf
       tok←⎕TALLOC 1('mcp-client:',⊃cmd)
       h←(
@@ -31,6 +39,10 @@
         Status:'Running'
         ExitCode:¯1 ⋄ ExitReason:¯1 ⋄ Pid:¯1
         Tok:tok ⋄ InTok:tok+0.1 ⋄ SigTok:tok+0.2
+        StopWait:opts ⎕VGET⊂'StopWait' 10
+        Killed:0
+        CaptureStderr:opts ⎕VGET⊂'CaptureStderr' 0
+        StderrLines:⍬
       )
       h.Tid←_Run&h ⍝ needs h to already exist, so can't join the literal above
     ∇
@@ -65,17 +77,15 @@
     ∇
 
     ∇ {r}←Stop h
-      ⍝ Close stdin, wait (up to ~10s) for the child to exit, release
-      ⍝ the handle's token range. Safe to call more than once.
-      ⍝ TODO: if the process hasn't exited by the deadline, force-kill
-      ⍝ it via 8373⌶ instead of just giving up (see TODO.md).
+      ⍝ Close stdin, wait (up to h.StopWait seconds) for the child to
+      ⍝ exit, force-kill it if that deadline passes, then release the
+      ⍝ handle's token range. Safe to call more than once.
       :If h.Status≡'Running'
           ⎕TPUT h.InTok ⍝ a token with no data closes the fed stream
-          n←10
-          :While (h.Status≡'Running')∧(n>0)
-              {}1 ⎕TGET h.SigTok ⍝ wake on every queue/status change, 1s max
-              n←n-1
-          :EndWhile
+          _AwaitExit h h.StopWait
+          :If h.Status≡'Running' ⍝ closing stdin wasn't enough — see _ForceKill
+              h.Killed←_ForceKill h
+          :EndIf
       :EndIf
       :Trap 0
           h.Tok ⎕TALLOC ¯1
@@ -83,6 +93,48 @@
           ⍝ already released, or still in use — nothing more we can do
       :EndTrap
       r←⍬
+    ∇
+
+    ∇ {r}←_AwaitExit(h seconds)
+      ⍝ Wait up to `seconds` (1s at a time, waking early on any queue or
+      ⍝ status change) for the child to exit. Note ∧ below does NOT
+      ⍝ short-circuit in Dyalog, which is fine here — both operands are
+      ⍝ always safe to evaluate.
+      n←seconds
+      :While (h.Status≡'Running')∧(n>0)
+          {}1 ⎕TGET h.SigTok
+          n←n-1
+      :EndWhile
+      r←⍬
+    ∇
+
+    ∇ ok←_ForceKill h
+      ⍝ Terminate the child process outright, for a server that ignores
+      ⍝ its stdin being closed (ADR D18). A server blocked in a wait
+      ⍝ with no timeout — test/09's `hang` mode is exactly this — never
+      ⍝ notices EOF on stdin, so the graceful path above can only ever
+      ⍝ time out and leave the process running forever. Worse, such an
+      ⍝ orphan has been observed to block an entirely separate, later
+      ⍝ process launch on Windows, so this isn't just housekeeping.
+      ⍝
+      ⍝ 9(8373⌶)tid: a POSITIVE right argument is an APL THREAD number
+      ⍝ whose ⎕SHELL call is still running (a negative one would be a
+      ⍝ negated PID, and only for processes ⎕SHELL has already given up
+      ⍝ on) — h.Tid is exactly that thread. 9 is the only signal
+      ⍝ Microsoft Windows accepts here, where it means TerminateProcess.
+      ok←0
+      :Trap 0
+          ok←9(8373⌶)h.Tid
+      :Else
+          ⍝ thread already gone, or the OS refused — nothing else to try
+      :EndTrap
+      :If ok
+          ⍝ ⎕SHELL returns on the killed thread shortly after; give _Run
+          ⍝ a moment to record ExitCode/ExitReason and flip Status, so a
+          ⍝ caller that inspects the handle right after Stop sees the
+          ⍝ truth rather than a stale 'Running'.
+          _AwaitExit h 5
+      :EndIf
     ∇
 
     ∇ {r}←_Run h
@@ -123,10 +175,24 @@
     ∇
 
     ∇ {r}←h _OnStderr info
-      ⍝ Output ('Callback' ...) target for stream 2 — deliberately
-      ⍝ discards everything (see ADR D5/D11: a server's stderr logging
-      ⍝ is none of our business, and we can't use Output ('Null') here
-      ⍝ instead — see the comment in _Run).
+      ⍝ Output ('Callback' ...) target for stream 2 — discards
+      ⍝ everything by default (see ADR D5/D11: a server's stderr
+      ⍝ logging is none of our business, and we can't use Output
+      ⍝ ('Null') here instead — see the comment in _Run), unless the
+      ⍝ caller asked for it via opts.CaptureStderr, in which case the
+      ⍝ lines are queued on the handle for debugging (ADR D18). Kept
+      ⍝ opt-in because a chatty long-running server would otherwise
+      ⍝ grow this queue without bound, with nothing ever draining it.
+      ⍝ Deliberately does NOT ⎕TPUT h.SigTok: stderr arriving is not
+      ⍝ news for anyone blocked in Receive, which only ever wants
+      ⍝ stream 1.
+      :If h.CaptureStderr
+          lines←info.Output
+          :If info.PartialLine∧~info.Done
+              lines←¯1↓lines ⍝ incomplete last line, kept for next call
+          :EndIf
+          h.StderrLines,←lines
+      :EndIf
       r←1
     ∇
 

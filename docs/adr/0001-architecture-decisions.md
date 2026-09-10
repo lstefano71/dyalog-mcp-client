@@ -915,3 +915,122 @@ looking `h` function appeared in the listing, and the intended
 `_NextMessage` was simply absent) — worth remembering as a diagnostic
 technique if a newly-added function seems to silently not exist after
 `⎕FIX`.
+
+### D18. Robustness hardening: force-kill, stderr capture, error detail
+
+Phase 7 closed the four robustness items `TODO.md` had accumulated
+against already-working layers, plus the one verification item. All
+four were things Phase 6's fixture server (ADR D14) had turned from
+"reasoned about" into "reproducible on demand" — which is why they
+were scheduled after it rather than before.
+
+**Force-kill after the graceful wait (`Shell.Stop`,
+`JsonRpcCl.Disconnect`).** Both used to close the child's stdin, wait
+up to ~10s for it to exit, and then simply give up — releasing the
+token range but leaving the process running. That is fine for a server
+that treats EOF on stdin as "shut down", which every well-behaved one
+does; it is useless against a server blocked in a wait with no timeout
+(`test/09`'s `hang` mode is exactly that), which never notices EOF at
+all. The graceful wait can then only ever run out, and the child
+outlives the interpreter.
+
+This was not just untidy. As recorded in `TODO.md`, one such orphan
+from an earlier `test/09` run caused a *later, entirely separate*
+`dyalogscript.ps1` launch — a different process, for a different
+test — to hang indefinitely with no error, until the orphaned
+`python.exe` was killed externally. The root cause of that
+cross-process interference was never fully diagnosed (plausibly
+inherited stdio/console handles on Windows), but its existence made
+the missing force-kill a reliability hazard for routine test runs
+rather than a housekeeping nicety.
+
+The fix is `9(8373⌶)h.Tid` once the graceful deadline passes. Two
+things about that call are easy to get wrong and are commented at the
+call site:
+
+- The right argument is an **APL thread number**, not a PID —
+  positive values identify the child of a `⎕SHELL` call still running
+  on that thread, which is exactly what `h.Tid` is. (Negative values
+  are negated PIDs, but *only* for processes a **finished** `⎕SHELL`
+  call already gave up on, which is a different situation from this
+  one.)
+- On Microsoft Windows `9` is the **only** accepted signal value,
+  where it means `TerminateProcess`.
+
+`Stop` then waits briefly again for `⎕SHELL` to return on the killed
+thread, so `_Run` has actually recorded `ExitCode`/`ExitReason` and
+flipped `Status` before a caller inspects the handle — otherwise a
+force-killed handle would read as still `'Running'` for a moment after
+`Stop` returned, which is precisely the lie this phase set out to fix.
+The handle gained two fields for this: `StopWait` (the graceful
+deadline, an option, default 10 — tests set it to 1, since against a
+server that ignores EOF the wait is guaranteed wasted) and `Killed`
+(`1` if force-kill was needed), the latter being what makes
+"force-kill happened" and, just as importantly, "force-kill did *not*
+happen for a well-behaved child" both directly assertable.
+
+The few lines are duplicated in `JsonRpcCl` rather than shared,
+consistent with D13's decision that it stays self-contained rather
+than building on `Shell`.
+
+**Stderr capture is opt-in (`CaptureStderr`/`StderrLines`).** Stream 2
+stays discarded by default, for the reasons D5/D11 already give (a
+server logging to stderr is legal and none of our business, and it
+must never reach the line-oriented protocol stream). But there was
+previously no way at all to see what a server had logged there, which
+is unhelpful when a server is misbehaving and its own diagnostics are
+the only clue. `opts.CaptureStderr←1` now queues those lines onto
+`h.StderrLines` instead of dropping them. Deliberately opt-in, not the
+default: nothing ever drains that queue, so a chatty long-running
+server would otherwise grow it without bound. The capture path also
+deliberately does **not** `⎕TPUT h.SigTok` — stderr arriving is not
+news for anyone blocked in `Receive`, which only ever wants stream 1 —
+and it reuses `_OnOutput`'s partial-line handling, since stream 2 is
+in ordinary line mode in both transports (in `JsonRpcCl` that's not
+symmetry for its own sake: stream 2 has to be line-mode there anyway,
+per D13's variant-combination gotcha).
+
+**JSON-RPC error `code`/`data` survive an `Mcp`-layer signal.**
+`Mcp.ListTools`/`CallTool` signalled with `resp.error.message` alone,
+discarding `code` and `data`. Carrying them through turned out to be
+more constrained than expected: `⎕SIGNAL`'s name/value form can only
+override names that a system-generated `⎕DMX` **already defines**
+(`EN`, `Message`, `Vendor`, ...) — supplying anything else is a
+`DOMAIN ERROR` — so there is simply nowhere in the signal itself to
+put a structured payload of our own. Hence a deliberate split:
+
+- The **message text** gains ` (JSON-RPC code <n>)`, and
+  `, data: <json>` when the server sent a `data` member, so a human
+  reading the signal (or a test asserting on `⎕DMX.EM`) sees the code
+  without extra work.
+- The **whole error object** is stashed on `h.LastError` for a caller
+  that needs to *branch* on the code rather than report it — which was
+  the actual open request in `TODO.md`.
+
+`Mcp.Connect`'s initialize-rejection path gets the message text but
+cannot stash anything: it is failing, so the caller never receives a
+handle to read `LastError` from. That asymmetry is commented in place
+rather than papered over.
+
+**Multiple concurrent child processes: verification, no code change.**
+Each `Start`/`Connect` already takes its own `⎕TALLOC` range, so this
+was designed to work and simply had never been run. `test/14` now runs
+three NDJSON children and one Content-Length child simultaneously,
+firing every request before collecting any response, and checks each
+handle gets back its **own** answer. The distinct-per-handle payloads
+(`alpha`/`beta`/`gamma`, then `1+100`/`2+100`/`3+100`) are the point:
+a reply landing on the wrong handle's queue would show up as a wrong
+*value*, whereas identical payloads would let a genuine crossed-wires
+bug pass by luck. Token bases came out `8 9 10 11` — distinct, as
+designed. No changes were needed.
+
+**Testing.** `test/14-robustness-hardening.apls` covers all five
+items, and `test/09`'s `hang` section now asserts the force-kill it
+used to be the source of orphans from (its own `Shell.Stop` line was
+the leak). `examples/toy-jsonrpc-server.py` and its Content-Length
+twin both gained a `log(text)` method — a server writing to stderr on
+demand, which nothing before this phase could provoke — keeping the
+two twins in sync as D13 intended. The real proof for the force-kill
+is external to APL and worth stating explicitly: `Get-Process python`
+reports **zero** surviving processes after the run, where before this
+phase the same run would leave the hung one behind indefinitely.

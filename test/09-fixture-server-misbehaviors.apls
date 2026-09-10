@@ -44,7 +44,14 @@ h←JsonRpc.Connect cmd
 JsonRpc.Disconnect h
 
 ⍝ --- Mode 3: hang — server never responds; must time out ---
-h←JsonRpc.Connect cmd
+⍝ StopWait:1 shortens the graceful-exit wait Stop makes before
+⍝ force-killing (Phase 7, ADR D18): this server ignores stdin being
+⍝ closed, so that wait can only ever run out — waiting the default 10s
+⍝ for it to is pure cost. Before Phase 7 there was no force-kill after
+⍝ it, which is why this very line used to leave an orphaned python.exe
+⍝ behind (see TODO.md's Shell-layer section for how much trouble that
+⍝ turned out to cause); test/14 is where that fix is asserted.
+h←(StopWait:1)JsonRpc.Connect cmd
 h.Timeout←2
 :Trap 999
     r←h JsonRpc.Call'hang'
@@ -53,6 +60,7 @@ h.Timeout←2
     ⎕←'hang -> timeout signaled ok: ',⎕DM
 :EndTrap
 Shell.Stop h.Shell
+⎕←'  force-killed=',(⍕h.Shell.Killed),' Status after Stop=',h.Shell.Status
 
 ⍝ --- Mode 4: burst — N unsolicited notifications ahead of the real response ---
 h←JsonRpc.Connect cmd
