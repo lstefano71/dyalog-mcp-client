@@ -1123,3 +1123,83 @@ vice versa.
 `JsonRpc`'s malformed-JSON path: `EM` comes back as exactly `'JsonRpc'`
 and `Message` at 8028 characters with the offending line whole. The
 full suite (`test/01`–`14`) was re-run afterwards.
+
+### D20. `Shell` exercised against a real interpreter, not just JSON-RPC peers
+
+Every test in this suite drove `Shell` through a JSON-RPC peer of some
+kind (`fff-mcp`, the toy servers, the fixture server). That left the
+central claim of D1/D5 — and of the Tutorial's step 1, which says in so
+many words that this layer "would work exactly the same way talking to
+something that speaks CSV lines" — asserted but never actually
+demonstrated. `test/15-shell-sqlite-repl.apls` and
+`examples/sqlite-repl.apls` demonstrate it, against `sqlite3 -batch`.
+
+**Why an interpreter/REPL is the right thing to pick.** It is the same
+shape as a stdio server (long-running child, read a line, write lines)
+with none of the JSON, so it exercises exactly the part of `Shell` that
+is general and none of the part that is about MCP. It is also a genuinely
+useful thing to be able to do: this gives APL a SQL database with no
+driver, no `⎕NA`, and no DLL.
+
+**Which one.** Candidates present on the dev machine were surveyed by
+running them through `Shell` rather than by reasoning about them, which
+was the right call — two of five failed for reasons no amount of
+thinking would have surfaced:
+
+| Peer | Verdict |
+| --- | --- |
+| `sqlite3 -batch` | **chosen.** Flushes per statement even when stdout is a pipe; no prompt, no banner; errors on stderr |
+| `duckdb -noheader -list` | works identically; kept as a documented substitution |
+| `python -u -i -q` | works — `print(2+2)` → `4`. `-u` is **mandatory**: without it Python block-buffers stdout once it isn't a terminal and `Receive` waits forever for output sitting in the child's buffer |
+| `node -i` | rejected: writes a banner to stdout and echoes input, so the result stream needs unpicking before it means anything |
+| `deno repl -q` | rejected: won't even start in this environment (fails creating its history file under a directory it can't write) |
+
+The two rejections are worth keeping in the record: "is it line
+oriented?" is not the whole question. "Does it flush when stdout isn't a
+tty?" and "does it keep its chatter off stdout?" decide it just as much,
+and neither is visible from a manual page.
+
+**What the test pins that no JSON-RPC peer ever exercised.** Three
+things, all of them properties of `Shell`'s contract rather than of
+sqlite3:
+
+- **One `Send`, many response lines.** A three-row query produces three
+  lines and nothing in the stream says so. Framing an *answer* is a
+  protocol problem, not a transport one — `JsonRpc` solves it with an
+  `id`, and driving a non-JSON-RPC peer means inventing a convention,
+  here a `select '<<end>>';` sentinel row. This is pedagogically the
+  most valuable part: it makes concrete what the next layer up is
+  actually *for*, which the Tutorial previously had to assert.
+- **A child that reports errors on stderr.** `sqlite3` puts
+  `Parse error near line 9: no such table: no_such_table` on stream 2,
+  exactly as D5 assumed a well-behaved child would, so the result stream
+  stays clean — and a failed query is therefore indistinguishable from
+  an empty result unless the caller asked for `CaptureStderr` (D18).
+  This is an unplanned but much better justification for that option
+  than the contrived `log(text)` method it was originally verified with:
+  a real tool, whose real diagnostics would otherwise silently vanish.
+- **A child that survives its own errors.** The session keeps answering
+  after the failed query, and `Stop` needs no force-kill (`sqlite3`
+  exits on EOF), which is the well-behaved counterpart to the `hang`
+  fixture D18 was written for.
+
+**Two APL bugs this surfaced while being written**, both in the example
+rather than the library, and both worth recording as traps:
+
+- `⊃⎕VFI txt` returns `⎕VFI`'s **valid-mask**, not its values — the
+  numbers are the second element. The year `1966` silently came out as
+  `1` (the mask), which is exactly the failure mode the `_ToInt` bug in
+  D15 had: `⎕VFI`'s two-element result is easy to disclose wrongly and
+  the wrong answer is often still a plausible-looking number.
+- `'3' '1991'` is **not** two character vectors: a one-character literal
+  is a character *scalar*, so it never `≡`s the one-element vector a
+  split produces. The test compares the aggregate numerically instead,
+  which sidesteps the whole question.
+
+**Documentation.** The Tutorial gains **step 1b**, deliberately numbered
+that way rather than inserted as a new "step 2" — renumbering steps 2–6
+would have invalidated cross-references from the Reference, ADR,
+`PLAN.md` and `TODO.md` for no gain. It sits immediately after step 1's
+claim about CSV lines, so the demonstration follows the assertion. The
+Reference gains a note under `Shell.Receive` about answer framing, which
+is where a reader hits the question.

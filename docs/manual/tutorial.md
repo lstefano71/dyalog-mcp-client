@@ -5,11 +5,14 @@ in order rather than being looked up by topic — that's what the
 [Reference](reference.md) is for. Read this once; come back to the
 Reference afterward.
 
-We'll go bottom-up through all four layers, against three different
-real processes, on purpose: it's the only way to actually show which
-parts of this client are general-purpose (`Shell`, `JsonRpc`, `Mcp` —
-see **Layer** in [`CONTEXT.md`](../../CONTEXT.md)) and which part is
-specific to one server (`Fff` — a **Cover**).
+We'll go bottom-up through the layers, against several different real
+processes, on purpose: it's the only way to actually show which parts of
+this client are general-purpose (`Shell`, `JsonRpc`, `Mcp` — see
+**Layer** in [`CONTEXT.md`](../../CONTEXT.md)) and which part is
+specific to one server (`Fff` — a **Cover**). One of those processes
+isn't a server at all, and doesn't speak JSON: step 1b drives `sqlite3`,
+which is the shortest way to show that the bottom layer genuinely
+doesn't care what the lines mean.
 
 ## Prerequisites
 
@@ -18,6 +21,8 @@ specific to one server (`Fff` — a **Cover**).
 - Python 3 on your `PATH` — used for a small toy server in step 2.
 - Node.js with `npx` on your `PATH` — used for a second real MCP
   server in step 3.
+- `sqlite3` on your `PATH` — used in step 1b. Any line-oriented
+  interpreter would do; `duckdb` or `python` work the same way.
 
 Bootstrap once, at the start of any session:
 
@@ -70,6 +75,84 @@ alone MCP. That's the whole point of this layer — it would work
 exactly the same way talking to something that speaks CSV lines, or
 plain log output, or anything else line-oriented. Everything from here
 on is built *on top of* this, not instead of it.
+
+## Step 1b — still `Shell`: talking SQL to `sqlite3`
+
+That last paragraph is easy to write and easy to disbelieve, so here it
+is actually done. `sqlite3 -batch` reads SQL from stdin and writes
+result rows to stdout, one row per line, with no prompt and no banner —
+which makes it a perfectly ordinary peer for this layer, and gives you
+a SQL database from APL with no driver, no `⎕NA`, and no DLL.
+
+```apl
+h←(CaptureStderr:1)Shell.Start'sqlite3' '-batch'
+h Shell.Send'.mode list'
+h Shell.Send'.separator |'
+h Shell.Send'create table t(id integer, name text);'
+h Shell.Send'insert into t values (1,''alpha''),(2,''beta''),(3,''gamma'');'
+```
+
+Now ask it something. One `Send` produces *three* lines back — and
+nothing in the stream says so. This is the part JSON-RPC's `id` field
+does for you later and nobody does for you here, so you need a
+convention of your own; a sentinel row is the simplest one that works:
+
+```apl
+h Shell.Send'select id, name from t order by id;'
+h Shell.Send'select ''<<end>>'';'
+:Repeat
+    line←5 Shell.Receive h
+    ⎕←line
+:Until line≡'<<end>>'
+```
+```
+1|alpha
+2|beta
+3|gamma
+<<end>>
+```
+
+Worth sitting with for a second: `Shell.Receive` gave you exactly what
+you asked for and not one line more. Knowing that an answer has *ended*
+is not a transport problem, it's a protocol problem — and inventing a
+sentinel here is precisely the itch that `JsonRpc` scratches in the next
+step. Everything after this point in the Tutorial exists because
+`<<end>>` is a bad answer to a real question.
+
+Now break something on purpose:
+
+```apl
+h Shell.Send'select * from no_such_table;'
+h Shell.Send'select ''<<end>>'';'
+:Repeat ⋄ line←5 Shell.Receive h ⋄ :Until line≡'<<end>>'
+⎕←h.StderrLines
+```
+```
+ Parse error near line 7: no such table: no_such_table
+```
+
+The result stream stayed clean — the only thing on stdout was the
+sentinel — because `sqlite3` writes its errors to **stderr**, exactly as
+ADR D5 assumed a well-behaved child process would. `Shell` discards that
+stream by default, which is right for keeping the protocol stream
+uncorrupted and *wrong* the moment you actually want to know why a query
+returned nothing: without `CaptureStderr:1`, a failed query and an empty
+result look identical from up here. This is what that option is for.
+
+The session also survives the error — the connection is still good:
+
+```apl
+h Shell.Send'select count(*), max(name) from t;'
+⎕←5 Shell.Receive h     ⍝ 3|gamma
+Shell.Stop h
+```
+
+(`sqlite3` isn't special here. `duckdb -noheader -list` behaves
+identically, and so does `python -u -i -q` — Python puts its `>>>`
+prompts on stderr too, so `print(2+2)` comes back as a bare `4`. The
+`-u` matters: without it Python block-buffers stdout once it isn't a
+terminal and you'd wait forever. See `examples/sqlite-repl.apls`, and
+`test/15-shell-sqlite-repl.apls` for the same thing with assertions.)
 
 ## Step 2 — `JsonRpc`: request/response, against something that isn't MCP
 
@@ -379,3 +462,8 @@ defines beyond hover).
   the way, and the LSP handshake/`null`-result specifics `Lsp` hit).
 - `TODO.md` — what's explicitly not built yet, including the rest of
   LSP beyond `Lsp`'s narrow v1 scope.
+- `examples/sqlite-repl.apls` — step 1b written out in full, with a
+  couple of substitutions (`duckdb`, `python -u -i -q`) if you want to
+  point `Shell` at something else line-oriented. ADR D20 records which
+  interpreters were tried and why two of them didn't make the cut,
+  which is the more useful half of that exercise.

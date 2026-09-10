@@ -21,7 +21,28 @@ JSON-RPC batch requests (`CallBatch`), and notification dispatch
 runs on: a force-kill fallback for a child process that ignores its
 stdin being closed, opt-in stderr capture, JSON-RPC error `code`/`data`
 surviving an `Mcp`-layer signal, and verified multi-process operation.
-See Phases 7, 8, 10, 9, and 6 below, in that order.
+`Shell` is now also exercised against a real
+non-JSON interpreter (`sqlite3`), which is what finally demonstrated
+rather than asserted that the bottom layer is protocol-agnostic. See
+the `sqlite3` note and Phases 7, 8, 10, 9, and 6 below, in that order.
+
+## `Shell` against a real interpreter — `sqlite3` (ADR D20)
+
+Not a numbered phase; a gap noticed after Phase 7. Every test drove
+`Shell` through a JSON-RPC peer, so D1/D5's claim that the bottom layer
+is protocol-agnostic was asserted and never demonstrated.
+`test/15-shell-sqlite-repl.apls` and `examples/sqlite-repl.apls` drive
+`sqlite3 -batch` instead — a SQL database from APL with no driver, no
+`⎕NA` and no DLL — and pin three things no JSON-RPC peer exercises: one
+`Send` producing many response lines (so the caller must frame the
+answer itself, which is exactly what `JsonRpc`'s `id` exists to avoid),
+a child reporting errors on stderr (the best justification yet for
+Phase 7's `CaptureStderr`, since a failed query is otherwise
+indistinguishable from an empty result), and a child that survives its
+own errors. Candidates were surveyed by actually running them: `duckdb`
+works identically, `python` needs `-u` or it block-buffers forever,
+`node -i` was rejected for putting a banner on stdout, and `deno` won't
+start here at all. Tutorial gains step 1b.
 
 ## Phase 7 — robustness hardening
 

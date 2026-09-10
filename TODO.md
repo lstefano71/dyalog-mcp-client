@@ -242,6 +242,16 @@ Still open:
 
 ## Testing
 
+- **`Shell` against non-JSON-RPC peers is now covered, minimally** —
+  `test/15-shell-sqlite-repl.apls` drives `sqlite3 -batch` (ADR D20),
+  which is what finally demonstrated rather than merely asserted that
+  the bottom layer is protocol-agnostic. Still open, if it's ever
+  worth it: `python -u -i -q` and `duckdb -noheader -list` were both
+  verified to work by hand but only appear as documented substitutions,
+  not as committed tests — and a peer whose prompt goes to **stdout**
+  (`node -i`, rejected here for exactly that) has never been driven at
+  all, so nothing pins how awkward that case really is.
+
 - ~~Mocked stdio peer~~ — done: `examples/toy-jsonrpc-fixture-server.py`
   (NDJSON-framed, `crash`/`garbage`/`hang`/`burst` methods) plus
   `test/09-fixture-server-misbehaviors.apls` (ADR D14). Covers the four

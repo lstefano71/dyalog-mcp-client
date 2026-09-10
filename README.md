@@ -50,8 +50,11 @@ indexes slower cold on a large non-git tree):
 & <path-to-dyalog>\scriptbin\dyalogscript.ps1 test\01-initialize-handshake.apls
 ```
 
-See `examples/` for a large-tree demo script and the toy JSON-RPC
-server used in the Tutorial.
+See `examples/` for a large-tree demo script, the toy JSON-RPC servers
+used in the Tutorial, and `sqlite-repl.apls` — `Shell` driving `sqlite3`
+instead of a JSON-RPC peer, which is the shortest demonstration that the
+bottom layer really is protocol-agnostic (and gives you a SQL database
+from APL with no driver, no `⎕NA` and no DLL).
 
 ## License
 

@@ -130,6 +130,23 @@ read, or if the timeout elapses first.
 ```
 (`test/03-lifecycle-edge-cases.apls`)
 
+One line per call, and no notion of "the whole answer": if a peer
+replies with several lines to one `Send`, deciding when it has finished
+is *your* problem, not this layer's. `JsonRpc` solves it with a request
+`id`; drive something that isn't JSON-RPC and you need a convention of
+your own. A sentinel usually does:
+
+```apl
+h Shell.Send'select id, name from t order by id;'
+h Shell.Send'select ''<<end>>'';'   ⍝ sqlite3: an end-of-answer marker
+:Repeat
+    line←5 Shell.Receive h
+    ⎕←line
+:Until line≡'<<end>>'
+```
+(`test/15-shell-sqlite-repl.apls`; see also `examples/sqlite-repl.apls`
+and the Tutorial's step 1b)
+
 ### `{r}←Stop h`
 
 Closes stdin, waits up to `h.StopWait` seconds for the child to exit,

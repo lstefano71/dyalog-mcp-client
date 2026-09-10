@@ -1,0 +1,96 @@
+#!/usr/local/bin/dyalogscript
+⍝ Shell against a real, non-JSON, line-oriented interpreter: sqlite3
+⍝ (ADR D20; Tutorial step 1b; examples/sqlite-repl.apls is the same
+⍝ thing without assertions).
+⍝
+⍝ Why this is worth a test rather than just an example: every other test
+⍝ in this suite drives Shell through a JSON-RPC peer, so nothing
+⍝ actually PROVED the claim ADR D1/D5 and the Tutorial both make — that
+⍝ Shell is protocol-agnostic and would work the same against anything
+⍝ line-oriented. This does, and pins three behaviours that a JSON-RPC
+⍝ peer never exercises:
+⍝   - one Send producing MANY response lines (the caller frames the
+⍝     answer itself; there is no id to correlate on),
+⍝   - a child that reports its errors on stderr, so the result stream
+⍝     stays clean and CaptureStderr is the only way to see why a query
+⍝     returned nothing,
+⍝   - a child that keeps serving after an error rather than dying.
+⎕IO←1
+⎕FIX'file://D:/devel/mcp-client/src/Shell.dyalog'
+
+Check←{⍺:0 ⋄ ⎕←'FAIL: ',⍵ ⋄ 1}
+nFail←0
+
+⍝ One Send, N lines back, ended by a sentinel row we invent ourselves.
+∇ rows←h Query sql;line
+  h Shell.Send sql
+  h Shell.Send'select ''<<end>>'';'
+  rows←⍬
+  :Repeat
+      line←5 Shell.Receive h
+      :If line≡'<<end>>' ⋄ :Leave ⋄ :EndIf
+      rows,←⊂'|'(≠⊆⊢)line
+  :EndRepeat
+∇
+
+h←(CaptureStderr:1)Shell.Start'sqlite3' '-batch'
+
+⍝ '.mode list'/'.separator |' are what make each row exactly one line
+⍝ with a known delimiter — sqlite3's default output is a box-drawing
+⍝ table, which is not a framing anything could parse.
+h Shell.Send'.mode list'
+h Shell.Send'.separator |'
+h Shell.Send'create table lang(name text, year integer);'
+h Shell.Send'insert into lang values (''APL'',1966),(''SQL'',1974),(''Python'',1991);'
+
+⍝ --- 1. A multi-row answer, in order -------------------------------
+rows←h Query'select name, year from lang order by year;'
+⎕←'rows: ',⍕¨rows
+nFail+←(3=≢rows)Check'expected exactly three rows back from one Send'
+nFail+←((⊃¨rows)≡'APL' 'SQL' 'Python')Check'rows should arrive in the order asked for'
+nFail+←((2⊃2⊃rows)≡'1974')Check'the second column of the second row should be SQL''s year'
+
+⍝ Numeric conversion via ⎕VFI, never ⍎ — same house rule as the JSON
+⍝ layers use for server-supplied text. Note ⎕VFI returns
+⍝ (validMask values): the numbers are the SECOND element, and ⊃ on the
+⍝ whole result would silently give you the mask instead.
+years←{⊃2⊃⎕VFI 2⊃⍵}¨rows
+⎕←'years: ',⍕years
+nFail+←(years≡1966 1974 1991)Check'years should convert to real numbers'
+
+⍝ --- 2. A single-row aggregate -------------------------------------
+agg←h Query'select count(*), max(year) from lang;'
+⎕←'aggregate: ',⍕⊃agg
+nFail+←(1=≢agg)Check'an aggregate should be exactly one row'
+⍝ Compared as numbers, not as text: a literal ''3'' is a character
+⍝ SCALAR in APL, so ('3' '1991')≢(,'3')('1991') and a text comparison
+⍝ here fails for a reason that has nothing to do with sqlite3.
+nFail+←(({⊃2⊃⎕VFI ⍵}¨⊃agg)≡3 1991)Check'the aggregate values should be right'
+
+⍝ --- 3. An error goes to stderr, not into the result stream --------
+bad←h Query'select * from no_such_table;'
+⎕DL 1 ⍝ stdout/stderr are separate streams with no ordering guarantee
+⎕←'failed query rows=',(⍕≢bad),' stderr=',⍕h.StderrLines
+nFail+←(0=≢bad)Check'a failed query should contribute nothing to the result stream'
+nFail+←(0≠≢h.StderrLines)Check'CaptureStderr should have caught sqlite3''s error text'
+nFail+←(∨/∨/¨'no_such_table'∘⍷¨h.StderrLines)Check'the captured error should name the missing table'
+
+⍝ --- 4. ...and the child keeps serving afterwards ------------------
+alive←h Query'select ''yes'';'
+⎕←'after the error: ',⍕⊃alive
+nFail+←((⊃alive)≡,⊂'yes')Check'the session should survive a SQL error'
+nFail+←('Running'≡h.Status)Check'the child should still be running after a SQL error'
+
+⍝ --- 5. Ordinary teardown: EOF is enough, no force-kill needed -----
+Shell.Stop h
+⎕←'status=',h.Status,' killed=',⍕h.Killed
+nFail+←('Exited'≡h.Status)Check'sqlite3 should exit when its stdin closes'
+nFail+←(0=h.Killed)Check'sqlite3 exits on EOF, so it must not need force-killing'
+
+⎕←'nFail=',⍕nFail
+:If nFail≠0
+    ⎕←'FAIL: ',(⍕nFail),' check(s) failed'
+:Else
+    ⎕←'all checks passed'
+:EndIf
+⎕OFF

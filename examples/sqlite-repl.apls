@@ -1,0 +1,79 @@
+#!/usr/local/bin/dyalogscript
+⍝ Shell against sqlite3 — a SQL database from APL with no driver, no ⎕NA
+⍝ and no DLL, because `sqlite3 -batch` is just another line-oriented
+⍝ child process (ADR D20; Tutorial step 1b).
+⍝
+⍝ Nothing here knows about JSON. That's the point: Shell was built for
+⍝ NDJSON-framed JSON-RPC, but it has no idea what the lines mean, so any
+⍝ interpreter that reads a line and writes lines is a valid peer. Two
+⍝ substitutions that behave identically, if you'd rather try them:
+⍝
+⍝   duckdb -noheader -list        ⍝ same dialect-ish, same line framing
+⍝   python -u -i -q               ⍝ then Send 'print(2+2)' and read '4'
+⍝
+⍝ The -u on Python is not optional: without it Python block-buffers
+⍝ stdout as soon as it isn't a terminal, and Receive waits forever for
+⍝ output that's sitting in the child's buffer. sqlite3 and duckdb flush
+⍝ per statement on their own, which is why they need no such flag.
+⍝
+⍝ Run: & <dyalog>\scriptbin\dyalogscript.ps1 examples\sqlite-repl.apls
+⎕IO←1
+⎕FIX'file://D:/devel/mcp-client/src/Shell.dyalog'
+
+⍝ CaptureStderr because sqlite3 reports SQL errors there (see below).
+h←(CaptureStderr:1)Shell.Start'sqlite3' '-batch'
+
+⍝ '.mode list' + '.separator |' makes each row exactly one line with a
+⍝ known delimiter — i.e. turns sqlite3's output into a framing we can
+⍝ actually parse. The default box-drawing table would not be.
+h Shell.Send'.mode list'
+h Shell.Send'.separator |'
+h Shell.Send'create table lang(name text, year integer);'
+h Shell.Send'insert into lang values (''APL'',1966),(''SQL'',1974),(''Python'',1991);'
+
+⍝ One Send, three lines back — and nothing in the stream says how many
+⍝ to expect. Knowing an answer has ENDED is a protocol problem, not a
+⍝ transport one, so we need a convention of our own: a sentinel row.
+⍝ (This is exactly the itch JsonRpc's `id` field scratches one layer up.)
+∇ rows←h Query sql;line
+  h Shell.Send sql
+  h Shell.Send'select ''<<end>>'';'
+  rows←⍬
+  :Repeat
+      line←5 Shell.Receive h
+      :If line≡'<<end>>' ⋄ :Leave ⋄ :EndIf
+      rows,←⊂'|'(≠⊆⊢)line
+  :EndRepeat
+∇
+
+rows←h Query'select name, year from lang order by year;'
+⎕←'rows: ',⍕≢rows
+⎕←⍕¨rows
+
+⍝ Ordinary APL on the result, now that it's just nested character data.
+⍝ ⎕VFI returns (validMask values) — so the numbers are its SECOND
+⍝ element, and ⊃ on the result would quietly hand you the mask instead
+⍝ (a bug this example was written with, and caught by the year coming
+⍝ out as 1 rather than 1966).
+names←⊃¨rows
+years←{⊃2⊃⎕VFI 2⊃⍵}¨rows
+⎕←'names: ',⍕names
+⎕←'oldest: ',(⊃names[⍋years]),' (',(⍕⌊/years),')'
+
+⍝ An aggregate comes back as a single one-row answer, same shape.
+⎕←'count/max: ',⍕⊃h Query'select count(*), max(year) from lang;'
+
+⍝ Errors go to STDERR, so the result stream stays clean — which is also
+⍝ why a failed query and an empty result are indistinguishable up here
+⍝ unless you asked for CaptureStderr.
+bad←h Query'select * from no_such_table;'
+⎕←'rows from the failed query: ',⍕≢bad
+⎕DL 1 ⍝ stdout and stderr are separate streams with no ordering guarantee
+⎕←'stderr said: ',⍕h.StderrLines
+
+⍝ ...and the session survives it.
+⎕←'still alive: ',⍕⊃h Query'select ''yes'';'
+
+Shell.Stop h
+⎕←'status=',h.Status,' killed=',⍕h.Killed
+⎕OFF
