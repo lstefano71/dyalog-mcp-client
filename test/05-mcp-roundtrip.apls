@@ -1,0 +1,39 @@
+#!/usr/local/bin/dyalogscript
+⎕IO←1
+⎕FIX'file://D:/devel/mcp-client/src/Shell.dyalog'
+⎕FIX'file://D:/devel/mcp-client/src/JsonRpc.dyalog'
+⎕FIX'file://D:/devel/mcp-client/src/Mcp.dyalog'
+
+exe←'C:\Users\stf\AppData\Local\fff-mcp\bin\fff-mcp.exe'
+opts←⎕NS''
+opts.WorkingDir←'D:\devel\mcp-client'
+
+h←opts Mcp.Connect,⊂exe
+⎕←'connected to ',h.ServerInfo.name,' ',h.ServerInfo.version
+
+tools←Mcp.ListTools h
+⎕←'tools: ',⍕tools.name
+
+result←h Mcp.CallTool('find_files'(query:'Mcp'))
+⎕←'call ok, isError=',⍕result.isError
+
+⍝ A required argument missing is an invalid-params JSON-RPC error
+⍝ (protocol-level), so it must signal too — not come back as data.
+:Trap 999
+    h Mcp.CallTool'find_files' ⍝ no query given
+    ⎕←'FAIL: expected a signal for missing required arguments'
+:Else
+    ⎕←'missing-args call signaled ok: ',⎕DM
+:EndTrap
+
+⍝ Protocol-level failure must signal, not come back as data.
+:Trap 999
+    h Mcp.CallTool('not_a_real_tool'(query:'x'))
+    ⎕←'FAIL: expected a signal for an unknown tool'
+:Else
+    ⎕←'unknown tool signaled ok: ',⎕DM
+:EndTrap
+
+Mcp.Disconnect h
+⎕←'status after disconnect=',h.JsonRpc.Shell.Status
+⎕OFF

@@ -56,6 +56,14 @@ from.
   unsupported one (spec says the client SHOULD disconnect) — add explicit
   handling once tested against a server that actually negotiates down.
 
+- **Preserve JSON-RPC error detail on Mcp-layer signals**: `Mcp.ListTools`/
+  `Mcp.CallTool` currently signal with only `resp.error.message` when the
+  server returns a protocol-level JSON-RPC error (e.g. invalid params,
+  unknown tool). The error's `code` and `data` are discarded. Worth
+  carrying them through (e.g. via `⎕SIGNAL`'s name/value form) once
+  something downstream needs to branch on the error code rather than just
+  report it.
+
 ## Packaging / distribution
 
 - **Tatin package**: repo is plain source + `.dyapp` for now (ADR D9).
