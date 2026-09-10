@@ -70,7 +70,16 @@ from.
   child process itself is left running forever afterward (confirmed via
   `Get-Process python` still showing it) — closing stdin does nothing
   for a server blocked in a wait with no timeout, and there's currently
-  no way to reap it short of an external kill.
+  no way to reap it short of an external kill. **Worse than just an
+  orphan**: running the full test suite as a sequence of separate
+  `dyalogscript.ps1` invocations, one such orphan from an earlier
+  `test/09` run caused a *later, unrelated* `dyalogscript.ps1` launch
+  (a completely separate process, for a different test) to hang
+  indefinitely with no error — killing the orphaned `python.exe`
+  processes unblocked it immediately. Root cause not fully diagnosed
+  (plausibly inherited stdio/console handles on Windows), but this
+  makes the missing force-kill a real reliability hazard for routine
+  test runs, not just leaked-process housekeeping.
 
 ## JSON-RPC layer
 
