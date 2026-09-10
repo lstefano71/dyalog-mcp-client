@@ -1,8 +1,8 @@
 # Plan — Dyalog APL MCP Client
 
-**Status**: Phase 1 (`Shell`) done and verified against real `fff-mcp.exe`
-— see `src/Shell.dyalog` and `test/01-*.apls`..`03-*.apls`. Phases 2–3 not
-started.
+**Status**: Phases 1 (`Shell`) and 2 (`JsonRpc`) done and verified against
+real `fff-mcp.exe` — see `src/Shell.dyalog`/`src/JsonRpc.dyalog` and
+`test/01-*.apls`..`04-*.apls`. Phase 3 not started.
 
 Goal: an MCP client, written in and for Dyalog APL, that talks to stdio-based
 MCP servers via `⎕SHELL`. Built bottom-up in three phases, each independently

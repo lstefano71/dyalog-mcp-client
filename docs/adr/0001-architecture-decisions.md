@@ -144,3 +144,21 @@ untested surface. See TODO.md.
   git-indexed, which `fff-mcp` requires) rather than a mocked stdio peer.
   A canned-fixture mock may be added later if the real binary proves too
   slow/flaky for routine test runs.
+
+## Implementation notes (discovered while building, not in the docs)
+
+- **`Input ('Token' n)` data shape**: the value passed to `⎕TPUT` is not
+  raw data — it must itself be shaped like one of the `('Array' ...)`
+  input sources, e.g. `('Array' text 'UTF-8')`. That form also handles
+  newline-termination for free, matching the NDJSON framing requirement
+  (D5) without `Shell.Send` having to append `\n` itself.
+- **`Output ('Callback' fn)` return value**: the callback function must
+  return a Boolean scalar (continue/stop), or `⎕SHELL` raises a
+  `RANK ERROR`. Not called out in the variant's documented callback
+  contract.
+- **Namespace-script cross-references need `#.` qualification**: a
+  `:Namespace ... :EndNamespace` script fixed at the root gets lexical
+  scoping from `⎕FIX`, so a sibling top-level namespace (e.g. `JsonRpc`
+  calling into `Shell`) is *not* visible under its bare name the way it
+  would be from an unscripted/dynamically-scoped namespace — it must be
+  written `#.Shell.Start`, not `Shell.Start`.

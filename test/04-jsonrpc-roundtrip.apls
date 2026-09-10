@@ -1,0 +1,32 @@
+#!/usr/local/bin/dyalogscript
+⎕IO←1
+⎕FIX'file://D:/devel/mcp-client/src/Shell.dyalog'
+⎕FIX'file://D:/devel/mcp-client/src/JsonRpc.dyalog'
+
+exe←'C:\Users\stf\AppData\Local\fff-mcp\bin\fff-mcp.exe'
+opts←⎕NS''
+opts.WorkingDir←'D:\devel\mcp-client'
+h←opts JsonRpc.Connect,⊂exe
+
+r1←h JsonRpc.Call('initialize'(protocolVersion:'2025-06-18' ⋄ capabilities:() ⋄ clientInfo:(name:'x' ⋄ version:'0')))
+⎕←'init ok: ',r1.result.serverInfo.name,' (id=',(⍕r1.id),')'
+
+h JsonRpc.Notify'notifications/initialized'
+
+r2←h JsonRpc.Call'tools/list'
+⎕←'tools: ',⍕r2.result.tools.name,' (id=',(⍕r2.id),')'
+
+r3←h JsonRpc.Call('tools/call'(name:'find_files' ⋄ arguments:(query:'JsonRpc')))
+⎕←'call ok, isError=',(⍕r3.result.isError),' (id=',(⍕r3.id),')'
+
+⍝ Unknown method must come back as an ordinary JSON-RPC error response,
+⍝ not a signaled fault (ADR D6).
+r4←h JsonRpc.Call'not/a/real/method'
+⎕←'unknown method -> has error field: ',⍕0≠⎕NC'r4.error'
+⎕←'  error.code=',⍕r4.error.code
+
+⎕←'notifications queued (should be 0): ',⍕≢h.Notifications
+
+JsonRpc.Disconnect h
+⎕←'status after disconnect=',h.Shell.Status
+⎕OFF
